@@ -7,6 +7,7 @@ import datetime
 import re
 from collections import defaultdict
 from src.services.graph_client import GraphClient
+from src.utils.config import USER_EMAIL
 from src.chains.briefing_chain import build_insights_chain, FollowUpItem, UpdateItem
 
 # ---------- Calendar helpers ----------
@@ -83,17 +84,17 @@ def detect_obvious_follow_ups(emails, conversations):
             name = mail.get("from_name") or mail.get("from_address")
             items.append(FollowUpItem(
                 action=f"Reply to {name}",
-                reasoning=f"Unread email asks: {mail['subject']}",
+                reasoning=f"Recent email asks: {mail['subject']}",
                 contact=mail["from_address"]
             ))
 
-    # Sent messages >3 days with no reply
+    # Sent messages >= 3 days with no reply
     for conv in conversations:
         if conv.get("last_direction") == "you":
             try:
                 sent_date = datetime.datetime.strptime(conv.get("last_sent", "")[:10], "%Y-%m-%d").date()
                 days_ago = (today - sent_date).days
-                if days_ago > 3:
+                if days_ago >= 7:
                     items.append(FollowUpItem(
                         action="Follow up on: " + conv.get("subject", ""),
                         reasoning=f"No reply for {days_ago} days",
@@ -164,8 +165,13 @@ def validate_insights(insights, recent_emails, conversations):
 
     insights.follow_ups = [f for f in insights.follow_ups
                            if f.contact.lower() in known_emails or f.contact.lower() in known_names]
+        # Only keep updates where the evidence actually contains a promotion keyword
+    def is_real_update(item):
+        evidence_lower = item.evidence.lower()
+        return any(kw in evidence_lower for kw in PROMOTION_PHRASES)
+
     insights.potential_updates = [u for u in insights.potential_updates
-                                  if u.email.lower() in known_emails]
+                                  if u.email.lower() in known_emails and is_real_update(u)]
 
 # ---------- Main ----------
 def main():
@@ -173,14 +179,20 @@ def main():
     graph = GraphClient()
 
     calendar_events = graph.get_calendar_events(days=7)
-    recent_emails = graph.get_recent_emails(days=3, top=20)
-        # --- DIAGNOSTIC: dump what we actually got from Graph ---
-    print(f"\n🔎 DEBUG: Number of recent emails fetched: {len(recent_emails)}")
+    recent_emails = graph.get_recent_emails(days=7, top=50)
+    # -----------------------------------------------------------
+        # TEMPORARY DIAGNOSTIC – inspect what the detection functions will see
+    print(f"\n🔎 DIAGNOSTIC: {len(recent_emails)} recent emails:")
     for i, mail in enumerate(recent_emails):
+        body_text = mail.get("body", "")
+        has_question = any(kw in body_text.lower() for kw in ["?", "when should we meet", "can you", "please let me know", "what are your availabilities"])
+        has_promo = any(kw in body_text.lower() for kw in PROMOTION_PHRASES)
         print(f"Email {i+1}:")
         print(f"  From: {mail.get('from_name','')} <{mail.get('from_address','')}>")
         print(f"  Subject: {mail.get('subject','')}")
-        print(f"  Body preview: {mail.get('body','')[:200]}")
+        print(f"  Body preview (first 200 chars): {body_text[:200]}")
+        print(f"  Question keyword match: {has_question}")
+        print(f"  Promotion keyword match: {has_promo}")
         print()
     # -----------------------------------------------------------
     conversations = graph.get_recent_conversations(days=14)
@@ -274,7 +286,7 @@ UPDATES
     print(briefing)
 
     # Create Outlook draft
-    graph.create_draft(to="rvira@reachpathways.com", subject="Daily Briefing", body=briefing)
+    graph.create_draft(to=USER_EMAIL, subject="Daily Briefing", body=briefing)
 
 if __name__ == "__main__":
     main()

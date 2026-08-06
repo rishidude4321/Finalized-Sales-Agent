@@ -39,3 +39,5 @@ KNOWN_GOOD_MODELS = [
     "anthropic/claude-opus-4",
     "openai/gpt-4o",
 ]
+
+USER_EMAIL = "rvira@reachpathways.com"  # Change to correct email when deploying
