@@ -118,7 +118,7 @@ class GraphClient:
             f"?$filter=receivedDateTime ge {since}"
             f"&$orderby=receivedDateTime desc"
             f"&$top={top}"
-            f"&$select=from,subject,bodyPreview,receivedDateTime,isRead"
+            f"&$select=from,subject,bodyPreview,receivedDateTime,isRead,conversationID"
         )
         data = self._make_request("GET", endpoint)
         if not data:
@@ -135,6 +135,7 @@ class GraphClient:
                 "preview": msg.get("bodyPreview", "")[:300],
                 "received": msg.get("receivedDateTime", ""),
                 "isRead": msg.get("isRead", False),
+                "conversationID": msg.get("conversationID", ""),
             })
         return emails
 
@@ -171,6 +172,7 @@ class GraphClient:
                 "last_sent": msg.get("sentDateTime", ""),
                 "last_message_preview": msg.get("bodyPreview", "")[:100],
                 "last_direction": "you",
+                "conversationId": conv_id,
             }
 
         # Also fetch recent received emails from those same contacts (if they replied)

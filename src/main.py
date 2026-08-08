@@ -1,14 +1,32 @@
 """
-Daily Briefing (Module 1) – hybrid deterministic + LLM extraction.
+Daily Briefing (Module 1) – 100% deterministic, no LLM hallucination risk.
 Run from project root: python -m src.main
 """
 
 import datetime
 import re
 from collections import defaultdict
+from pydantic import BaseModel
 from src.services.graph_client import GraphClient
 from src.utils.config import USER_EMAIL
-from src.chains.briefing_chain import build_insights_chain, FollowUpItem, UpdateItem
+
+# ---------- Local data classes ----------
+class FollowUpItem(BaseModel):
+    action: str
+    reasoning: str
+    contact: str
+
+class UpdateItem(BaseModel):
+    name: str
+    email: str
+    new_title: str
+    evidence: str
+
+class VagueCommitmentItem(BaseModel):
+    sender_name: str
+    sender_email: str
+    subject: str
+    preview: str
 
 # ---------- Calendar helpers ----------
 def split_calendar_by_today(events):
@@ -49,41 +67,58 @@ def format_event_list(events, include_date=False):
             lines.append(f"  • {subject} ({start_time}–{end_time}) – {attendees}")
     return "\n".join(lines)
 
-def remove_contradictory_lines(text: str) -> str:
-    if "No passive updates detected today." in text:
-        lines = text.splitlines()
-        new_lines, in_updates, seen_update = [], False, False
-        for line in lines:
-            if line.strip().startswith("=== UPDATES ==="):
-                in_updates = True
-                new_lines.append(line)
-                continue
-            if in_updates:
-                if line.strip().startswith("•"):
-                    seen_update = True
-                    new_lines.append(line)
-                elif "No passive updates detected today." in line and seen_update:
-                    continue
-                else:
-                    new_lines.append(line)
-            else:
-                new_lines.append(line)
-        return "\n".join(new_lines)
-    return text
+# Patterns to skip (add/remove as Sasha discovers false positives)
+AUTOMATED_SENDERS = [
+    "no-reply@", "noreply@", "donotreply@", "microsoftsecurity-noreply@",
+    "no-reply@teams.mail.microsoft",
+]
+AUTOMATED_SUBJECT_CONTAINS = [
+    "is trying to reach you in Microsoft Teams",
+    "accepted:", "declined:", "tentative:",
+    "out of office", "automatic reply",
+    "your statement is ready", "weekly digest", "newsletter",
+]
+
+def is_automated_email(mail):
+    """Return True if the email is from an automated sender or notification."""
+    from_address = mail.get("from_address", "").lower()
+    subject = mail.get("subject", "").lower()
+    body = mail.get("body", "").lower()
+
+    for pattern in AUTOMATED_SENDERS:
+        if pattern in from_address:
+            return True
+    for phrase in AUTOMATED_SUBJECT_CONTAINS:
+        if phrase in subject:
+            return True
+    # Skips calendar invites/updates
+    if "content-type: text/calendar" in body or "BEGIN:VCALENDAR" in body:
+        return True
+    return False
 
 # ---------- Deterministic follow‑up detection ----------
 def detect_obvious_follow_ups(emails, conversations):
     items = []
     today = datetime.date.today()
 
-    # Unread emails with questions/meeting requests
+    # Incoming emails with explicit questions/requests (skip automated)
     question_kw = ["?", "when should we meet", "can you", "please let me know", "what are your availabilities"]
+        # Build a lookup: for each conversationId, the latest received date from recent inbox emails
+    inbox_latest = {}
     for mail in emails:
+        cid = mail.get("conversationId")
+        if cid:
+            received = mail.get("received", "")
+            if cid not in inbox_latest or received > inbox_latest[cid]:
+                inbox_latest[cid] = received
+    for mail in emails:
+        if is_automated_email(mail):
+            continue
         body = mail.get("body", "").lower()
         if any(kw in body for kw in question_kw):
             name = mail.get("from_name") or mail.get("from_address")
             items.append(FollowUpItem(
-                action=f"Reply to {name}",
+                action=f"Reply to {name} re: {mail['subject']}",
                 reasoning=f"Recent email asks: {mail['subject']}",
                 contact=mail["from_address"]
             ))
@@ -91,46 +126,89 @@ def detect_obvious_follow_ups(emails, conversations):
     # Sent messages >= 3 days with no reply
     for conv in conversations:
         if conv.get("last_direction") == "you":
+            cid = conv.get("conversationId")
+            sent_dt_str = conv.get("last_sent", "")
+            if not cid or not sent_dt_str:
+                continue
             try:
-                sent_date = datetime.datetime.strptime(conv.get("last_sent", "")[:10], "%Y-%m-%d").date()
+                sent_dt = datetime.datetime.strptime(sent_dt_str[:19], "%Y-%m-%dT%H:%M:%S")
+                sent_date = sent_dt.date()
                 days_ago = (today - sent_date).days
-                if days_ago >= 7:
-                    items.append(FollowUpItem(
-                        action="Follow up on: " + conv.get("subject", ""),
-                        reasoning=f"No reply for {days_ago} days",
-                        contact="relevant contact"
-                    ))
+                if days_ago < 3:
+                    continue
+                # Check if there is an incoming message in this thread after our sent date
+                last_received = inbox_latest.get(cid)
+                if last_received and last_received > sent_dt_str:
+                    continue  # a reply exists, skip
+                items.append(FollowUpItem(
+                    action="Follow up on: " + conv.get("subject", ""),
+                    reasoning=f"No reply for {days_ago} days",
+                    contact="relevant contact"
+                ))
             except:
                 pass
     return items
 
-# ---------- Promotion fallback scanner ----------
+# ---------- Promotion detection (100% deterministic) ----------
 PROMOTION_PHRASES = [
     "promoted to", "new role", "title change",
     "starting a new position", "excited to share that i've joined"
 ]
 
-def detect_promotions_fallback(emails, existing_updates):
-    existing_emails = {u.email.lower() for u in existing_updates}
-    new_items = []
+def detect_promotions(emails):
+    """Find promotion-related updates from recent emails."""
+    items = []
     for mail in emails:
+        if is_automated_email(mail):
+            continue
         body = mail.get("body", "").lower()
         for phrase in PROMOTION_PHRASES:
-            if phrase in body and mail["from_address"].lower() not in existing_emails:
+            if phrase in body:
                 idx = body.find(phrase)
-                snippet = body[idx:idx+80].replace("\n", " ")
-                new_items.append(UpdateItem(
+                snippet = body[idx:idx+80]
+                snippet = re.sub(r'\s+', ' ', snippet).strip()
+                items.append(UpdateItem(
                     name=mail.get("from_name") or mail["from_address"],
                     email=mail["from_address"],
                     new_title="(see evidence)",
                     evidence=snippet
                 ))
                 break
-    return new_items
+    return items
+
+# ---------- Vague commitment detection ----------
+VAGUE_PHRASES = [
+    "circle back", "touch base", "let's reconnect", "follow up in a few",
+    "ping me after", "reconnect after", "catch up after", "chat next month",
+    "talk later", "revisit this", "check in after", "set up a call later",
+    "loop back", "bump this after", "let's revisit", "ping me when",
+    "catch up soon", "talk soon", "reconnect in a bit", "sync up later",
+    "lets circle back", "we should reconnect", "i'll follow up", "i will follow up",
+    "i'll ping you", "i will ping you", "we'll catch up", "we will catch up",
+    "let's chat", "let's sync", "let's talk", "let's connect",
+    "after the holidays", "after the weekend", "after the conference",
+    "next month", "next quarter", "in the new year",
+    "when things settle", "when you're free",
+]
+
+def detect_vague_commitments(emails):
+    """Flag emails with vague future plans that Sasha should review manually."""
+    items = []
+    for mail in emails:
+        if is_automated_email(mail):
+            continue
+        body = mail.get("body", "").lower()
+        if any(phrase in body for phrase in VAGUE_PHRASES):
+            items.append(VagueCommitmentItem(
+                sender_name=mail.get("from_name") or mail["from_address"],
+                sender_email=mail["from_address"],
+                subject=mail["subject"],
+                preview=mail["body"][:150]
+            ))
+    return items
 
 # ---------- Deduplication ----------
 def deduplicate_follow_ups(items):
-    """Remove duplicates by comparing (contact, action) similarity."""
     seen = set()
     unique = []
     for item in items:
@@ -151,7 +229,8 @@ def deduplicate_updates(items):
     return unique
 
 # ---------- Validation ----------
-def validate_insights(insights, recent_emails, conversations):
+def validate_follow_ups(follow_ups, recent_emails, conversations):
+    """Remove items where contact is not in any known email address or name."""
     known_emails = set()
     known_names = set()
     for mail in recent_emails:
@@ -163,15 +242,15 @@ def validate_insights(insights, recent_emails, conversations):
         for e in re.findall(r'[\w\.-]+@[\w\.-]+', preview):
             known_emails.add(e.lower())
 
-    insights.follow_ups = [f for f in insights.follow_ups
-                           if f.contact.lower() in known_emails or f.contact.lower() in known_names]
-        # Only keep updates where the evidence actually contains a promotion keyword
-    def is_real_update(item):
-        evidence_lower = item.evidence.lower()
-        return any(kw in evidence_lower for kw in PROMOTION_PHRASES)
+    return [f for f in follow_ups
+            if f.contact.lower() in known_emails or f.contact.lower() in known_names]
 
-    insights.potential_updates = [u for u in insights.potential_updates
-                                  if u.email.lower() in known_emails and is_real_update(u)]
+def validate_updates(updates, recent_emails):
+    """Remove updates where email not in recent emails, or evidence lacks promotion phrase."""
+    known_emails = {mail["from_address"].lower() for mail in recent_emails}
+    return [u for u in updates
+            if u.email.lower() in known_emails and
+            any(kw in u.evidence.lower() for kw in PROMOTION_PHRASES)]
 
 # ---------- Main ----------
 def main():
@@ -180,24 +259,9 @@ def main():
 
     calendar_events = graph.get_calendar_events(days=7)
     recent_emails = graph.get_recent_emails(days=7, top=50)
-    # -----------------------------------------------------------
-        # TEMPORARY DIAGNOSTIC – inspect what the detection functions will see
-    print(f"\n🔎 DIAGNOSTIC: {len(recent_emails)} recent emails:")
-    for i, mail in enumerate(recent_emails):
-        body_text = mail.get("body", "")
-        has_question = any(kw in body_text.lower() for kw in ["?", "when should we meet", "can you", "please let me know", "what are your availabilities"])
-        has_promo = any(kw in body_text.lower() for kw in PROMOTION_PHRASES)
-        print(f"Email {i+1}:")
-        print(f"  From: {mail.get('from_name','')} <{mail.get('from_address','')}>")
-        print(f"  Subject: {mail.get('subject','')}")
-        print(f"  Body preview (first 200 chars): {body_text[:200]}")
-        print(f"  Question keyword match: {has_question}")
-        print(f"  Promotion keyword match: {has_promo}")
-        print()
-    # -----------------------------------------------------------
     conversations = graph.get_recent_conversations(days=14)
 
-    # Build combined conversations (unread emails as virtual threads)
+    # Build combined conversations (recent emails as virtual threads)
     combined_conversations = list(conversations)
     for mail in recent_emails:
         combined_conversations.append({
@@ -207,59 +271,45 @@ def main():
             "last_message_preview": mail["preview"],
         })
 
-    # 1. Deterministic follow‑ups (Python)
-    deterministic_follow_ups = detect_obvious_follow_ups(recent_emails, combined_conversations)
+    # 1. Deterministic follow‑ups
+    follow_ups = detect_obvious_follow_ups(recent_emails, combined_conversations)
+    follow_ups = deduplicate_follow_ups(follow_ups)
+    follow_ups = validate_follow_ups(follow_ups, recent_emails, combined_conversations)
 
-    # 2. LLM extraction (only supplementary)
-    def format_conv(convs):
-        lines = []
-        for c in convs:
-            lines.append(f"- {c.get('subject','')} | dir:{c.get('last_direction','?')} "
-                         f"on {c.get('last_sent','')[:10]} | {c.get('last_message_preview','')[:80]}")
-        return "\n".join(lines) if lines else "No conversations."
+    # 2. Promotion updates
+    updates = detect_promotions(recent_emails)
+    updates = deduplicate_updates(updates)
+    updates = validate_updates(updates, recent_emails)
 
-    def format_emails(emails):
-        lines = []
-        for mail in emails:
-            sender = mail.get("from_name") or mail.get("from_address")
-            lines.append(f"---\nFrom: {sender} ({mail['from_address']})\nSubject: {mail['subject']}\nBody: {mail['body']}\n")
-        return "\n".join(lines) if lines else "No unread emails."
+    # 3. Vague commitments
+    vague_items = detect_vague_commitments(recent_emails)
 
-    conv_text = format_conv(combined_conversations)
-    emails_text = format_emails(recent_emails)
+    # (LLM extraction commented out – no longer needed)
+    # chain = build_insights_chain()
+    # insights = chain.invoke({...})
 
-    chain = build_insights_chain()
-    print("🧠 Extracting supplementary insights...")
-    insights = chain.invoke({
-        "conversations": conv_text,
-        "emails": emails_text,
-    })
-
-    # 3. Merge deterministic + LLM follow‑ups, then deduplicate
-    all_follow_ups = deterministic_follow_ups + insights.follow_ups
-    insights.follow_ups = deduplicate_follow_ups(all_follow_ups)
-
-    # 4. Add fallback promotions, deduplicate updates
-    extra_updates = detect_promotions_fallback(recent_emails, insights.potential_updates)
-    all_updates = insights.potential_updates + extra_updates
-    insights.potential_updates = deduplicate_updates(all_updates)
-
-    # 5. Validate against real data
-    validate_insights(insights, recent_emails, combined_conversations)
-
-    # 6. Calendar sections
+    # Calendar sections
     today_events, upcoming_events = split_calendar_by_today(calendar_events)
     today_section = format_event_list(today_events)
     upcoming_section = format_event_list(upcoming_events, include_date=True)
 
-    # 7. Build text sections
+    # Follow‑ups text
     follow_ups_text = "\n".join(
-        [f"• {f.action} — {f.reasoning} (Contact: {f.contact})" for f in insights.follow_ups]
-    ) if insights.follow_ups else "• No outstanding follow-ups identified."
+        [f"• {f.action} — {f.reasoning} (Contact: {f.contact})" for f in follow_ups]
+    ) if follow_ups else "• No outstanding follow-ups identified."
 
+    # Updates text
     updates_text = "\n".join(
-        [f"• Potential update: {u.name} ({u.email}) – {u.new_title}. Evidence: {u.evidence}" for u in insights.potential_updates]
-    ) if insights.potential_updates else "• No passive updates detected today."
+        [f"• Potential update: {u.name} ({u.email}) – {u.new_title}. Evidence: {u.evidence}" for u in updates]
+    ) if updates else "• No passive updates detected today."
+
+    # Vague commitments text
+    if vague_items:
+        vague_text = "\n".join(
+            [f"• {v.sender_name} ({v.sender_email}) – Subject: {v.subject} – Preview: {v.preview}" for v in vague_items]
+        )
+    else:
+        vague_text = "• No vague commitments needing review."
 
     today_date_str = datetime.date.today().strftime("%A, %B %d").replace(" 0", " ")
     briefing = f"""=== DAILY BRIEFING ===
@@ -277,9 +327,10 @@ UPCOMING MEETINGS (This Week)
 
 UPDATES
 {updates_text}
-"""
-    briefing = remove_contradictory_lines(briefing)
 
+NEEDS YOUR REVIEW (Vague commitments)
+{vague_text}
+"""
     print("\n" + "=" * 60)
     print("DAILY BRIEFING")
     print("=" * 60)
