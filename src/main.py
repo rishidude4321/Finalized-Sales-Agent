@@ -6,9 +6,16 @@ Run from project root: python -m src.main
 import datetime
 import re
 from collections import defaultdict
+from pathlib import Path
+import json
 from pydantic import BaseModel
 from src.services.graph_client import GraphClient
-from src.utils.config import USER_EMAIL
+import hashlib
+from src.utils.config import DONE_SECRET, USER_EMAIL
+import urllib.parse
+
+# constants
+DONE_FILE = "done_followups.json"
 
 # ---------- Local data classes ----------
 class FollowUpItem(BaseModel):
@@ -72,9 +79,9 @@ AUTOMATED_SENDERS = [
     "no-reply@", "noreply@", "donotreply@", "microsoftsecurity-noreply@",
     "no-reply@teams.mail.microsoft",
 ]
+AUTOMATED_SUBJECT_PREFIXES = ("accepted:", "declined:", "tentative:")
 AUTOMATED_SUBJECT_CONTAINS = [
     "is trying to reach you in Microsoft Teams",
-    "accepted:", "declined:", "tentative:",
     "out of office", "automatic reply",
     "your statement is ready", "weekly digest", "newsletter",
 ]
@@ -85,15 +92,24 @@ def is_automated_email(mail):
     subject = mail.get("subject", "").lower()
     body = mail.get("body", "").lower()
 
+    # Check sender
     for pattern in AUTOMATED_SENDERS:
         if pattern in from_address:
             return True
+
+    # Check subject prefixes (meeting responses)
+    if subject.startswith(AUTOMATED_SUBJECT_PREFIXES):
+        return True
+
+    # Check subject contains
     for phrase in AUTOMATED_SUBJECT_CONTAINS:
         if phrase in subject:
             return True
-    # Skips calendar invites/updates
+
+    # Check for calendar content
     if "content-type: text/calendar" in body or "BEGIN:VCALENDAR" in body:
         return True
+
     return False
 
 # ---------- Deterministic follow‑up detection ----------
@@ -252,6 +268,43 @@ def validate_updates(updates, recent_emails):
             if u.email.lower() in known_emails and
             any(kw in u.evidence.lower() for kw in PROMOTION_PHRASES)]
 
+def generate_followup_hash(contact, action):
+    raw = f"{contact}|{action}".lower().strip()
+    return hashlib.md5(raw.encode()).hexdigest()[:12]
+
+def load_done_items():
+    if Path(DONE_FILE).exists():
+        with open(DONE_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_done_items(data):
+    with open(DONE_FILE, "w") as f:
+        json.dump(data, f, indent=2, default=str)
+
+def filter_done_follow_ups(items):
+    """Remove follow‑ups that are soft‑deleted, and hard‑delete entries older than 7 days."""
+    done = load_done_items()
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=7)
+    cleaned = {}
+    for item_id, info in done.items():
+        if info.get("deleted"):
+            deleted_at = datetime.datetime.fromisoformat(info["deleted_at"])
+            if deleted_at < cutoff:
+                continue  # hard delete
+            cleaned[item_id] = info
+        else:
+            cleaned[item_id] = info
+    save_done_items(cleaned)
+
+    filtered = []
+    for item in items:
+        item_id = generate_followup_hash(item.contact, item.action)
+        if item_id in cleaned and cleaned[item_id].get("deleted"):
+            continue
+        filtered.append(item)
+    return filtered
+
 # ---------- Main ----------
 def main():
     print("🔄 Fetching data from Microsoft Graph...")
@@ -260,7 +313,7 @@ def main():
     calendar_events = graph.get_calendar_events(days=7)
     recent_emails = graph.get_recent_emails(days=7, top=50)
     conversations = graph.get_recent_conversations(days=14)
-
+    
     # Build combined conversations (recent emails as virtual threads)
     combined_conversations = list(conversations)
     for mail in recent_emails:
@@ -275,6 +328,7 @@ def main():
     follow_ups = detect_obvious_follow_ups(recent_emails, combined_conversations)
     follow_ups = deduplicate_follow_ups(follow_ups)
     follow_ups = validate_follow_ups(follow_ups, recent_emails, combined_conversations)
+    follow_ups = filter_done_follow_ups(follow_ups)
 
     # 2. Promotion updates
     updates = detect_promotions(recent_emails)
@@ -293,11 +347,6 @@ def main():
     today_section = format_event_list(today_events)
     upcoming_section = format_event_list(upcoming_events, include_date=True)
 
-    # Follow‑ups text
-    follow_ups_text = "\n".join(
-        [f"• {f.action} — {f.reasoning} (Contact: {f.contact})" for f in follow_ups]
-    ) if follow_ups else "• No outstanding follow-ups identified."
-
     # Updates text
     updates_text = "\n".join(
         [f"• Potential update: {u.name} ({u.email}) – {u.new_title}. Evidence: {u.evidence}" for u in updates]
@@ -312,32 +361,78 @@ def main():
         vague_text = "• No vague commitments needing review."
 
     today_date_str = datetime.date.today().strftime("%A, %B %d").replace(" 0", " ")
-    briefing = f"""=== DAILY BRIEFING ===
+    follow_up_lines = []
+    for f in follow_ups:
+        item_id = generate_followup_hash(f.contact, f.action)
+        done_link = (
+            f"http://localhost:8500/done?id={item_id}&token={DONE_SECRET}"
+            f"&action={urllib.parse.quote(f.action)}"
+            f"&reasoning={urllib.parse.quote(f.reasoning)}"
+            f"&contact={urllib.parse.quote(f.contact)}"
+        )
+        follow_up_lines.append(
+            f'<li>{f.action} — {f.reasoning} (Contact: {f.contact}) '
+            f'<a href="{done_link}">[Mark Done]</a></li>'
+        )
+    if follow_up_lines:
+        follow_ups_text = "<ul>" + "".join(follow_up_lines) + "</ul>"
+    else:
+        follow_ups_text = "<p>• No outstanding follow-ups identified.</p>"
 
-AGENDA & FOCUS
-• Today's Meetings ({today_date_str}):
-{today_section}
-• Top Priority: Review the day's meetings and prepare any necessary materials.
+    # Build updates as HTML
+    if updates:
+        update_lines = [f'<li>Potential update: {u.name} ({u.email}) – {u.new_title}. Evidence: {u.evidence}</li>' for u in updates]
+        updates_text = "<ul>" + "".join(update_lines) + "</ul>"
+    else:
+        updates_text = "<p>• No passive updates detected today.</p>"
 
-FOLLOW-UPS & DROPS
+    # Build vague commitments as HTML
+    if vague_items:
+        vague_lines = [f'<li>{v.sender_name} ({v.sender_email}) – Subject: {v.subject} – Preview: {v.preview}</li>' for v in vague_items]
+        vague_text = "<ul>" + "".join(vague_lines) + "</ul>"
+    else:
+        vague_text = "<p>• No vague commitments needing review.</p>"
+
+    # Build today's meetings as HTML (preserve line breaks)
+    today_section_html = today_section.replace("\n", "<br>")
+    upcoming_section_html = upcoming_section.replace("\n", "<br>")
+
+    undo_link = f'http://localhost:8500/recent?token={DONE_SECRET}'
+
+    briefing = f"""<html><body>
+<h2>=== DAILY BRIEFING ===</h2>
+
+<h3>AGENDA & FOCUS</h3>
+<p><strong>Today's Meetings ({today_date_str}):</strong><br>
+{today_section_html}<br>
+<strong>Top Priority:</strong> Review the day's meetings and prepare any necessary materials.</p>
+
+<h3>FOLLOW-UPS & DROPS</h3>
 {follow_ups_text}
 
-UPCOMING MEETINGS (This Week)
-{upcoming_section}
+<h3>UPCOMING MEETINGS (This Week)</h3>
+<p>{upcoming_section_html}</p>
 
-UPDATES
+<h3>UPDATES</h3>
 {updates_text}
 
-NEEDS YOUR REVIEW (Vague commitments)
+<hr>
+
+<h3>NEEDS YOUR REVIEW (Vague commitments)</h3>
 {vague_text}
-"""
+
+<hr>
+<p><em>Accidentally marked something done? <a href="{undo_link}">View recent changes.</a></em></p>
+</body></html>"""
+
     print("\n" + "=" * 60)
     print("DAILY BRIEFING")
     print("=" * 60)
     print(briefing)
 
-    # Create Outlook draft
-    graph.create_draft(to=USER_EMAIL, subject="Daily Briefing", body=briefing)
+    # Create Outlook draft as HTML
+    graph.create_draft(to=USER_EMAIL, subject="Daily Briefing", body=briefing, content_type="HTML")
+    
 
 if __name__ == "__main__":
     main()

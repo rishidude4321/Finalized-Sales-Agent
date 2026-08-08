@@ -41,3 +41,6 @@ KNOWN_GOOD_MODELS = [
 ]
 
 USER_EMAIL = "rvira@reachpathways.com"  # Change to correct email when deploying
+
+# Secret token for marking follow‑ups done (prevents anyone on the network from triggering)
+DONE_SECRET = os.getenv("DONE_SECRET", "sasha-sales-agent-2026")
