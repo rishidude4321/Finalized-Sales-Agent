@@ -13,6 +13,7 @@ from src.services.graph_client import GraphClient
 import hashlib
 from src.utils.config import DONE_SECRET, USER_EMAIL
 import urllib.parse
+from src.services.hubspot_client import HubSpotClient
 
 # constants
 DONE_FILE = "done_followups.json"
@@ -309,10 +310,15 @@ def filter_done_follow_ups(items):
 def main():
     print("🔄 Fetching data from Microsoft Graph...")
     graph = GraphClient()
-
     calendar_events = graph.get_calendar_events(days=7)
     recent_emails = graph.get_recent_emails(days=7, top=50)
     conversations = graph.get_recent_conversations(days=14)
+
+    # HubSpot data
+    print("🔄 Fetching data from HubSpot...")
+    hubspot = HubSpotClient()
+    outstanding_deals = hubspot.get_outstanding_deals()
+    recent_contacts = hubspot.get_recent_contacts(days=7)
     
     # Build combined conversations (recent emails as virtual threads)
     combined_conversations = list(conversations)
@@ -399,26 +405,56 @@ def main():
 
     undo_link = f'http://localhost:8500/recent?token={DONE_SECRET}'
 
-    briefing = f"""<html><body>
-<h2>=== DAILY BRIEFING ===</h2>
+        # HubSpot deals text
+    if outstanding_deals:
+        deal_lines = []
+        for deal in outstanding_deals:
+            stage_name = hubspot.get_deal_stage_name(deal["stage"])
+            last_mod = deal["last_modified"][:10] if deal["last_modified"] else "unknown"
+            amount = f" (${deal['amount']})" if deal["amount"] else ""
+            deal_lines.append(f'<li>{deal["name"]}{amount} – Stage: {stage_name} – Last activity: {last_mod}</li>')
+        deals_text = "<ul>" + "".join(deal_lines) + "</ul>"
+    else:
+        deals_text = "<p>• No outstanding deals needing attention.</p>"
 
-<h3>AGENDA & FOCUS</h3>
+    # HubSpot contacts text
+    if recent_contacts:
+        contact_lines = []
+        for contact in recent_contacts:
+            title = f" – {contact['jobtitle']}" if contact.get("jobtitle") else ""
+            company = f" at {contact['company']}" if contact.get("company") else ""
+            contact_lines.append(f'<li>{contact["name"]}{title}{company} ({contact["email"]}) – Updated: {contact["last_modified"][:10]}</li>')
+        contacts_text = "<ul>" + "".join(contact_lines) + "</ul>"
+    else:
+        contacts_text = "<p>• No recently updated contacts.</p>"
+
+    briefing = f"""<html><body>
+<h2>Daily Briefing</h2>
+<hr>
+
+<h3>Agenda</h3>
 <p><strong>Today's Meetings ({today_date_str}):</strong><br>
 {today_section_html}<br>
 <strong>Top Priority:</strong> Review the day's meetings and prepare any necessary materials.</p>
 
-<h3>FOLLOW-UPS & DROPS</h3>
+<h3>Follow-Ups</h3>
 {follow_ups_text}
 
-<h3>UPCOMING MEETINGS (This Week)</h3>
+<h3>Upcoming Meetings This Week</h3>
 <p>{upcoming_section_html}</p>
 
-<h3>UPDATES</h3>
+<h3>Updates</h3>
 {updates_text}
 
 <hr>
+<h3>DEALS NEEDING ATTENTION</h3>
+{deals_text}
 
-<h3>NEEDS YOUR REVIEW (Vague commitments)</h3>
+<h3>RECENTLY UPDATED CONTACTS</h3>
+{contacts_text}
+<hr>
+
+<h3>Needs Your Review (Vague commitments)</h3>
 {vague_text}
 
 <hr>

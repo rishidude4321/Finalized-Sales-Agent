@@ -20,7 +20,7 @@ GRAPH_SCOPES = ["Calendars.ReadWrite", "Mail.ReadWrite", "Mail.Send", "User.Read
 GRAPH_CACHE_FILE = "token_cache.json"   # Saved in project root
 
 # Hubspot credentials 
-
+HUBSPOT_ACCESS_TOKEN = os.getenv("HUBSPOT_ACCESS_TOKEN")
 
 
 # Local timezone for converting UTC datetimes from Microsoft Graph

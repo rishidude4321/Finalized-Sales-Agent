@@ -12,5 +12,12 @@
     "action": "Reply to Yolanda Harris re: Connecting with LEAP today",
     "reasoning": "Recent email asks: Connecting with LEAP today",
     "contact": "yolanda@leapinnovations.org"
+  },
+  "e87afbfd3e32": {
+    "deleted": true,
+    "deleted_at": "2026-08-09T01:33:33.813118",
+    "action": "Reply to Rishi Vira re: update",
+    "reasoning": "Recent email asks: update",
+    "contact": "rvira@purdue.edu"
   }
 }

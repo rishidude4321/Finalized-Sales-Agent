@@ -48,7 +48,7 @@ def mark_done():
         "contact": request.args.get("contact", ""),
     }
     save_data(data)
-    return """<h2>✅ Marked as done. This tab will close automatically.</h2>
+    return """<h2>✅ Marked as done. You can close this tab.</h2>
 <script>setTimeout(function(){ window.close(); }, 1500);</script>"""
 
 @app.route("/recent")
