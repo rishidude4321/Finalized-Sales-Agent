@@ -469,6 +469,18 @@ def main():
     # Create Outlook draft as HTML
     graph.create_draft(to=USER_EMAIL, subject="Daily Briefing", body=briefing, content_type="HTML")
     
+    # 5. Meeting Prep (process new events)
+    print("🔄 Running meeting prep...")
+    from src.services.meeting_prep import MeetingPrepProcessor
+    try:
+        prep = MeetingPrepProcessor()
+        processed = prep.process_new_events()
+        if processed:
+            print(f"   ✅ Added prep notes to {processed} meeting(s).")
+        else:
+            print("   ℹ️ No new meetings to prep.")
+    except RuntimeError as e:
+        print(f"⚠️ Meeting prep failed: {e}")
 
 if __name__ == "__main__":
     main()

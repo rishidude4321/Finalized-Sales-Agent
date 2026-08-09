@@ -1,0 +1,50 @@
+{
+  "purdue.edu": {
+    "timestamp": 1786300456.324949,
+    "data": {
+      "name": "Welcome to the Business School of the Future",
+      "description": "Purdue University's Daniels School of Business is educating the next generation of leaders ready to harness data and turn discoveries into societal change.",
+      "source": "serper.dev"
+    }
+  },
+  "gmail.com": {
+    "timestamp": 1786300458.562301,
+    "data": {
+      "name": "About Google: Our products, technology and company information ...",
+      "description": "Learn more about Google. Explore our innovative AI products and services, and how we're using technology to help improve lives around the world.",
+      "source": "serper.dev"
+    }
+  },
+  "goodwillgreatermc.org": {
+    "timestamp": 1786300461.136162,
+    "data": {
+      "name": "Goodwill Greater Milwaukee & Chicago | Thrift, Donate, Job Training ...",
+      "description": "We help people in Greater Milwaukee and Chicago gain the skills, knowledge and support they need to change their lives through The Power of Work.",
+      "source": "serper.dev"
+    }
+  },
+  "generic.com": {
+    "timestamp": 1786303364.961739,
+    "data": {
+      "name": "Generic Company - LinkedIn",
+      "description": "Generic company went out of business in 2013. Industry: Software Development. Company size: 1 employee. Type: Privately Held. Founded ...",
+      "source": "serper.dev"
+    }
+  },
+  "communitynonprofit.org": {
+    "timestamp": 1786303366.983828,
+    "data": {
+      "name": "Nonprofit organization - Wikipedia",
+      "description": "is a non-governmental entity that operates for a collective, public, or social benefit, rather than to generate profit for private owners.",
+      "source": "serper.dev"
+    }
+  },
+  "univeristy.edu": {
+    "timestamp": 1786303369.958252,
+    "data": {
+      "name": "Northwood University",
+      "description": "Northwood University is an international leader in free-enterprise education, as one of the top undergraduate business schools in Michigan.",
+      "source": "serper.dev"
+    }
+  }
+}

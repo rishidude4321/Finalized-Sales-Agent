@@ -1,0 +1,35 @@
+{
+  "corporate": {
+    "label": "Corporate Recruiter",
+    "keywords": [
+        "recruiting", "talent acquisition", "HR", "DEI", "diversity", "inclusion",
+        "ATS", "Handshake", "Workday", "early talent", "internship", "campus recruiting",
+        "diverse talent", "recruitment pipeline", "hiring manager", "talent pool",
+        "talent", "pipeline", "candidate", "candidates", "hiring", "employer",
+        "corporate", "recruiter", "job", "career fair", "onboarding"
+    ],
+    "talking_points": "Focus on access to diverse, curated candidate pools and DEI metrics. Emphasize long-term career support and retention.",
+    "relevant_people": ["Jeff"]
+  },
+  "education": {
+    "label": "Educational Institution",
+    "keywords": [
+      "university", "college", "student", "retention", "graduation", "persistence",
+      "under-resourced", "career services", "LMS", "academic", "provost", "dean",
+      "student success", "belonging", "mentorship", "campus", "higher ed", "k-12",
+      "school district", "charter", "HiPURS"
+    ],
+    "talking_points": "Highlight improved retention, belonging, and career pathways. Showcase leadership development and community building.",
+    "relevant_people": ["Brooke"]
+  },
+  "nonprofit": {
+    "label": "Nonprofit / Community Organization",
+    "keywords": [
+      "nonprofit", "community", "workforce development", "underserved", "impact",
+      "scalable", "capacity building", "program management", "grant", "funding",
+      "social impact", "civic", "youth", "mentoring"
+    ],
+    "talking_points": "Emphasize scalable, low-cost solutions that maximize in-person engagement. Focus on measurable outcomes and community reach.",
+    "relevant_people": ["Brooke"]
+  }
+}

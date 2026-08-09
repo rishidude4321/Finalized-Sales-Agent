@@ -204,3 +204,68 @@ class HubSpotClient:
                 "last_modified": updated,
             })
         return contacts
+
+    def get_contacts_by_domain(self, domain: str) -> List[Dict]:
+        """Retrieve all contacts whose email ends with the given domain."""
+        endpoint = "/crm/v3/objects/contacts/search"
+        payload = {
+            "filterGroups": [
+                {
+                    "filters": [
+                        {
+                            "propertyName": "email",
+                            "operator": "CONTAINS_TOKEN",
+                            "value": f"@{domain}",
+                        }
+                    ]
+                }
+            ],
+            "properties": ["firstname", "lastname", "email", "company", "jobtitle"],
+            "limit": 50,
+        }
+        data = self._make_request("POST", endpoint, json=payload)
+        if not data:
+            return []
+        contacts = []
+        for c in data.get("results", []):
+            p = c.get("properties", {})
+            contacts.append({
+                "id": c.get("id"),
+                "name": f"{p.get('firstname','')} {p.get('lastname','')}".strip(),
+                "email": p.get("email", ""),
+                "company": p.get("company", ""),
+                "jobtitle": p.get("jobtitle", ""),
+            })
+        return contacts
+
+    def get_company_by_domain(self, domain: str) -> Optional[Dict]:
+        """Find a HubSpot company by domain (uses company domain property)."""
+        endpoint = "/crm/v3/objects/companies/search"
+        payload = {
+            "filterGroups": [
+                {
+                    "filters": [
+                        {
+                            "propertyName": "domain",
+                            "operator": "EQ",
+                            "value": domain,
+                        }
+                    ]
+                }
+            ],
+            "properties": ["name", "domain", "description", "industry", "numberofemployees"],
+            "limit": 1,
+        }
+        data = self._make_request("POST", endpoint, json=payload)
+        if data and data.get("results"):
+            company = data["results"][0]
+            p = company.get("properties", {})
+            return {
+                "id": company.get("id"),
+                "name": p.get("name", ""),
+                "domain": p.get("domain", ""),
+                "description": p.get("description", ""),
+                "industry": p.get("industry", ""),
+                "employees": p.get("numberofemployees", ""),
+            }
+        return None

@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Jeff",
+    "email": "jeff@reachpathways.com",
+    "role": "CEO",
+    "criteria": ["enterprise", "decision maker", "large deal", "executive"]
+  },
+  {
+    "name": "Brooke",
+    "email": "brooke@reachpathways.com",
+    "role": "Partnerships Lead",
+    "criteria": ["college partner", "university", "nonprofit"]
+  }
+]

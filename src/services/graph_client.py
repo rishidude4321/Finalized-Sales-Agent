@@ -304,3 +304,58 @@ class GraphClient:
         else:
             print("⚠️ Failed to create draft.")
             return False
+        
+    def update_event_body(self, event_id: str, new_body: str) -> bool:
+        """
+        Overwrite the body of an existing calendar event.
+        Prepends the new content to any existing body (so prep note appears first).
+        """
+        endpoint = f"https://graph.microsoft.com/v1.0/me/events/{event_id}"
+        # First, get current body to preserve existing notes
+        current = self._make_request("GET", endpoint)
+        current_body = ""
+        if current:
+            current_body = current.get("body", {}).get("content", "")
+
+        # Combine: new prep note on top, old body below, separated by a divider.
+        combined = new_body + "\n\n---\n\n" + current_body if current_body.strip() else new_body
+
+        payload = {
+            "body": {
+                "contentType": "HTML",
+                "content": combined,
+            }
+        }
+        result = self._make_request("PATCH", endpoint, json=payload)
+        return result is not None
+
+    def get_recent_events(self, days_back: int = 7) -> List[Dict]:
+        """Get calendar events from the last `days_back` days (up to 50)."""
+        import datetime
+        now = datetime.datetime.utcnow()
+        start = (now - datetime.timedelta(days=days_back)).isoformat() + "Z"
+        end = now.isoformat() + "Z"
+
+        params = {
+            "startDateTime": start,
+            "endDateTime": end,
+            "$select": "id,subject,start,attendees,createdDateTime,body",
+            "$top": 50,
+            "$orderby": "createdDateTime desc",
+        }
+        endpoint = "https://graph.microsoft.com/v1.0/me/events"
+        data = self._make_request("GET", endpoint, params=params)
+        if not data:
+            return []
+        events = []
+        for event in data.get("value", []):
+            attendees = [a.get("emailAddress", {}).get("address", "") for a in event.get("attendees", [])]
+            events.append({
+                "id": event["id"],
+                "subject": event.get("subject", "No Subject"),
+                "start": event.get("start", {}).get("dateTime", ""),
+                "attendees": attendees,
+                "created": event.get("createdDateTime", ""),
+                "body": event.get("body", {}).get("content", ""),
+            })
+        return events

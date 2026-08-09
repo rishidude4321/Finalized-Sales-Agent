@@ -44,3 +44,6 @@ USER_EMAIL = "rvira@reachpathways.com"  # Change to correct email when deploying
 
 # Secret token for marking follow‑ups done (prevents anyone on the network from triggering)
 DONE_SECRET = os.getenv("DONE_SECRET", "sasha-sales-agent-2026")
+
+# Serper.dev API key for company enrichment (free tier: 2,500 queries)
+SERPER_API_KEY = os.getenv("SERPER_API_KEY", "")
