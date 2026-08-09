@@ -14,6 +14,7 @@ import hashlib
 from src.utils.config import DONE_SECRET, USER_EMAIL
 import urllib.parse
 from src.services.hubspot_client import HubSpotClient
+from src.services.draft_generator import DraftGenerator
 
 # constants
 DONE_FILE = "done_followups.json"
@@ -348,6 +349,11 @@ def main():
     # chain = build_insights_chain()
     # insights = chain.invoke({...})
 
+    # 3.5 Generate follow‑up drafts
+    draft_gen = DraftGenerator()
+    for follow_up in follow_ups:
+        draft_gen.create_follow_up_draft(follow_up)
+
     # Calendar sections
     today_events, upcoming_events = split_calendar_by_today(calendar_events)
     today_section = format_event_list(today_events)
@@ -481,6 +487,11 @@ def main():
             print("   ℹ️ No new meetings to prep.")
     except RuntimeError as e:
         print(f"⚠️ Meeting prep failed: {e}")
+
+    # 5.5 Post‑meeting drafts (catch any recently ended meetings)
+    if processed > 0:  # only if we processed new meetings (meaning watcher missed them)
+        # The watcher should handle this, but we can also run it now
+        pass  # We'll rely on the watcher for real‑time, but can add a manual run here later
 
 if __name__ == "__main__":
     main()

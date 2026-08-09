@@ -1,0 +1,18 @@
+{
+  "follow_up": {
+    "subject": "Following up – {original_subject}",
+    "body": "Hi {first_name},\n\nI wanted to follow up on my previous message about \"{original_subject}\". Please let me know if you have any questions or if there's a good time to connect.\n\nBest,\nSasha Peña"
+  },
+  "gentle_nudge": {
+    "subject": "Checking in – {original_subject}",
+    "body": "Hi {first_name},\n\nJust checking in on this. I understand you're busy, so please let me know when it might be a good time to reconnect. Thank you!\n\nBest,\nSasha Peña"
+  },
+  "post_meeting": {
+    "subject": "Great meeting you – {meeting_subject}",
+    "body": "Hi {first_name},\n\nIt was great meeting you today. Thank you for taking the time to discuss {meeting_subject}. {extra_context}\n\nPlease don't hesitate to reach out if any questions come up.\n\nBest,\nSasha Peña"
+  },
+  "long_term_nudge": {
+    "subject": "Reconnecting – {original_subject}",
+    "body": "Hi {first_name},\n\nIt's been a while since we last connected about \"{original_subject}\". I wanted to see if now is a better time to revisit this conversation. Let me know your thoughts.\n\nBest,\nSasha Peña"
+  }
+}

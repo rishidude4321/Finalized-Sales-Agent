@@ -280,3 +280,10 @@ class MeetingPrepProcessor:
                 print(f"   ❌ Failed to update event.")
         self._save_processed_ids()
         return processed_count
+
+    def process_post_meetings(self):
+        from src.services.draft_generator import DraftGenerator
+        draft_gen = DraftGenerator()
+        recent = self.graph.get_recently_ended_meetings(minutes=5)
+        for event in recent:
+            draft_gen.create_post_meeting_draft(event)

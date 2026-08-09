@@ -359,3 +359,33 @@ class GraphClient:
                 "body": event.get("body", {}).get("content", ""),
             })
         return events
+    
+    def get_recently_ended_meetings(self, minutes=30) -> List[Dict]:
+        """Get meetings that ended in the last `minutes` minutes."""
+        import datetime
+        now = datetime.datetime.utcnow()
+        window_start = (now - datetime.timedelta(minutes=minutes)).isoformat() + "Z"
+        end_filter = now.isoformat() + "Z"
+
+        params = {
+            "startDateTime": window_start,
+            "endDateTime": end_filter,
+            "$select": "id,subject,start,end,attendees",
+            "$top": 50,
+            "$orderby": "end/dateTime desc",
+        }
+        endpoint = "https://graph.microsoft.com/v1.0/me/calendarView"
+        data = self._make_request("GET", endpoint, params=params)
+        if not data:
+            return []
+        events = []
+        for event in data.get("value", []):
+            attendees = [a.get("emailAddress", {}).get("address", "") for a in event.get("attendees", [])]
+            events.append({
+                "id": event["id"],
+                "subject": event.get("subject", "No Subject"),
+                "start": event.get("start", {}).get("dateTime", ""),
+                "end": event.get("end", {}).get("dateTime", ""),
+                "attendees": attendees,
+            })
+        return events
