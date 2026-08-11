@@ -360,16 +360,19 @@ class GraphClient:
             })
         return events
     
-    def get_recently_ended_meetings(self, minutes=30) -> List[Dict]:
-        """Get meetings that ended in the last `minutes` minutes."""
+    def get_recently_ended_meetings(self, minutes: int = 30) -> List[Dict]:
+        """
+        Retrieve meetings that ended within the last `minutes` minutes.
+        Returns events with id, subject, start, end, and attendees.
+        """
         import datetime
         now = datetime.datetime.utcnow()
         window_start = (now - datetime.timedelta(minutes=minutes)).isoformat() + "Z"
-        end_filter = now.isoformat() + "Z"
+        end_window = now.isoformat() + "Z"
 
         params = {
             "startDateTime": window_start,
-            "endDateTime": end_filter,
+            "endDateTime": end_window,
             "$select": "id,subject,start,end,attendees",
             "$top": 50,
             "$orderby": "end/dateTime desc",
@@ -378,14 +381,27 @@ class GraphClient:
         data = self._make_request("GET", endpoint, params=params)
         if not data:
             return []
+
+        import datetime as dt_module
+        now_utc = dt_module.datetime.now(dt_module.timezone.utc)
         events = []
         for event in data.get("value", []):
+            end_str = event.get("end", {}).get("dateTime", "")
+            if end_str:
+                try:
+                    end_dt = dt_module.datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+                    if end_dt.tzinfo is None:
+                        end_dt = end_dt.replace(tzinfo=dt_module.timezone.utc)
+                    if end_dt >= now_utc:
+                        continue
+                except Exception as e:
+                    print(f"DEBUG: Time parse error for '{end_str}': {e}")
             attendees = [a.get("emailAddress", {}).get("address", "") for a in event.get("attendees", [])]
             events.append({
                 "id": event["id"],
                 "subject": event.get("subject", "No Subject"),
                 "start": event.get("start", {}).get("dateTime", ""),
-                "end": event.get("end", {}).get("dateTime", ""),
+                "end": end_str,
                 "attendees": attendees,
             })
         return events

@@ -487,6 +487,8 @@ def main():
             print("   ℹ️ No new meetings to prep.")
     except RuntimeError as e:
         print(f"⚠️ Meeting prep failed: {e}")
+        # Also catch any post‑meeting drafts
+    prep.process_post_meetings()
 
     # 5.5 Post‑meeting drafts (catch any recently ended meetings)
     if processed > 0:  # only if we processed new meetings (meaning watcher missed them)
