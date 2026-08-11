@@ -17,16 +17,19 @@ from src.services.hubspot_client import HubSpotClient
 from src.services.draft_generator import DraftGenerator
 import json
 from pathlib import Path
+import urllib.parse
 
 # constants
 DONE_FILE = "done_followups.json"
 DEAL_SUGGESTIONS_FILE = "deal_suggestions.json"
+CREATED_TASKS_FILE = "created_tasks.json"
 
 # ---------- Local data classes ----------
 class FollowUpItem(BaseModel):
     action: str
     reasoning: str
     contact: str
+    thread_id: str = ""
 
 class UpdateItem(BaseModel):
     name: str
@@ -39,6 +42,7 @@ class VagueCommitmentItem(BaseModel):
     sender_email: str
     subject: str
     preview: str
+    thread_id: str = ""
 
 # ---------- Calendar helpers ----------
 def split_calendar_by_today(events):
@@ -123,7 +127,7 @@ def detect_obvious_follow_ups(emails, conversations):
     today = datetime.date.today()
 
     # Incoming emails with explicit questions/requests (skip automated)
-    question_kw = ["?", "when should we meet", "can you", "please let me know", "what are your availabilities"]
+    question_kw = ["?", "when should we meet", "can you", "you can" "could you", "you could", "please let me know", "what are your availabilities"]
         # Build a lookup: for each conversationId, the latest received date from recent inbox emails
     inbox_latest = {}
     for mail in emails:
@@ -141,7 +145,8 @@ def detect_obvious_follow_ups(emails, conversations):
             items.append(FollowUpItem(
                 action=f"Reply to {name} re: {mail['subject']}",
                 reasoning=f"Recent email asks: {mail['subject']}",
-                contact=mail["from_address"]
+                contact=mail["from_address"],
+                thread_id=mail.get("conversationId", "")
             ))
 
     # Sent messages >= 3 days with no reply
@@ -164,7 +169,8 @@ def detect_obvious_follow_ups(emails, conversations):
                 items.append(FollowUpItem(
                     action="Follow up on: " + conv.get("subject", ""),
                     reasoning=f"No reply for {days_ago} days",
-                    contact="relevant contact"
+                    contact="relevant contact",
+                    thread_id=mail.get("conversationId", "")
                 ))
             except:
                 pass
@@ -224,7 +230,8 @@ def detect_vague_commitments(emails):
                 sender_name=mail.get("from_name") or mail["from_address"],
                 sender_email=mail["from_address"],
                 subject=mail["subject"],
-                preview=mail["body"][:150]
+                preview=mail["body"][:150],
+                thread_id=mail.get("conversationId", "")
             ))
     return items
 
@@ -273,8 +280,8 @@ def validate_updates(updates, recent_emails):
             if u.email.lower() in known_emails and
             any(kw in u.evidence.lower() for kw in PROMOTION_PHRASES)]
 
-def generate_followup_hash(contact, action):
-    raw = f"{contact}|{action}".lower().strip()
+def generate_followup_hash(contact, action, thread_id=""):
+    raw = f"{contact}|{action}|{thread_id}".lower().strip()
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 def load_done_items():
@@ -304,7 +311,7 @@ def filter_done_follow_ups(items):
 
     filtered = []
     for item in items:
-        item_id = generate_followup_hash(item.contact, item.action)
+        item_id = generate_followup_hash(item.contact, item.action, item.thread_id)
         if item_id in cleaned and cleaned[item_id].get("deleted"):
             continue
         filtered.append(item)
@@ -406,6 +413,17 @@ def generate_deal_suggestions(graph_client, hubspot_client):
 
     return suggestions
 
+def load_created_tasks():
+    path = Path(CREATED_TASKS_FILE)
+    if path.exists():
+        with open(path, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_created_tasks(data):
+    with open(CREATED_TASKS_FILE, "w") as f:
+        json.dump(data, f, indent=2, default=str)
+
 # ---------- Main ----------
 def main():
     print("🔄 Fetching data from Microsoft Graph...")
@@ -432,9 +450,19 @@ def main():
 
     # 1. Deterministic follow‑ups
     follow_ups = detect_obvious_follow_ups(recent_emails, combined_conversations)
+        # DEBUG
+    print(f"DEBUG: recent_emails count = {len(recent_emails)}")
+    for i, mail in enumerate(recent_emails):
+        print(f"  {i}: {mail.get('subject','?')} from {mail.get('from_address','?')}")
+    print(f"DEBUG: raw follow_ups count = {len(follow_ups)}")
+    for f in follow_ups:
+        print(f"  - {f.action} ({f.contact})")
     follow_ups = deduplicate_follow_ups(follow_ups)
+    print(f"DEBUG after dedup: {len(follow_ups)}")
     follow_ups = validate_follow_ups(follow_ups, recent_emails, combined_conversations)
+    print(f"DEBUG after validate: {len(follow_ups)}")
     follow_ups = filter_done_follow_ups(follow_ups)
+    print(f"DEBUG after filter_done: {len(follow_ups)}")
 
     # 2. Promotion updates
     updates = detect_promotions(recent_emails)
@@ -443,6 +471,11 @@ def main():
 
     # 3. Vague commitments
     vague_items = detect_vague_commitments(recent_emails)
+
+    # If an email appears in both follow-ups and vague commitments, keep only the vague entry
+    vague_thread_ids = {v.thread_id for v in vague_items if v.thread_id}
+    if vague_thread_ids:
+        follow_ups = [f for f in follow_ups if f.thread_id not in vague_thread_ids]
 
     # (LLM extraction commented out – no longer needed)
     # chain = build_insights_chain()
@@ -489,23 +522,49 @@ def main():
         deal_sugg_text = "<p>• No deal stage suggestions.</p>"
 
     today_date_str = datetime.date.today().strftime("%A, %B %d").replace(" 0", " ")
+    created_tasks = load_created_tasks()
     follow_up_lines = []
     for f in follow_ups:
-        item_id = generate_followup_hash(f.contact, f.action)
+        item_id = generate_followup_hash(f.contact, f.action, f.thread_id)
+        # Mark Done link
         done_link = (
             f"http://localhost:8500/done?id={item_id}&token={DONE_SECRET}"
             f"&action={urllib.parse.quote(f.action)}"
             f"&reasoning={urllib.parse.quote(f.reasoning)}"
             f"&contact={urllib.parse.quote(f.contact)}"
         )
+        # Create Task link (only if not already created)
+        if item_id in created_tasks:
+            task_html = "[Task &#10003;]"
+        else:
+            # Determine due days from reasoning
+            reasoning_lower = f.reasoning.lower()
+            if "recent email asks" in reasoning_lower:
+                due_days = 1
+            elif "no reply for" in reasoning_lower:
+                # extract days if possible
+                import re
+                days_match = re.search(r"(\d+)\s*days?", reasoning_lower)
+                days_num = int(days_match.group(1)) if days_match else 3
+                if days_num >= 14:
+                    due_days = 7
+                elif days_num >= 7:
+                    due_days = 7
+                else:
+                    due_days = 3
+            else:
+                due_days = 3
+            task_link = (
+                f"http://localhost:8500/create_task?hash={item_id}&email={urllib.parse.quote(f.contact)}"
+                f"&title={urllib.parse.quote(f.action)}&duedays={due_days}&token={DONE_SECRET}"
+            )
+            task_html = f'<a href="{task_link}">[Create Task]</a>'
+
         follow_up_lines.append(
-            f'<li>{f.action} — {f.reasoning} (Contact: {f.contact}) '
-            f'<a href="{done_link}">[Mark Done]</a></li>'
+            f'<li>{f.action} — {f.reasoning} (Contact: {f.contact})<br>'
+            f'<a href="{done_link}">[Mark Done]</a>  {task_html}</li>'
         )
-    if follow_up_lines:
-        follow_ups_text = "<ul>" + "".join(follow_up_lines) + "</ul>"
-    else:
-        follow_ups_text = "<p>• No outstanding follow-ups identified.</p>"
+    follow_ups_text = "<ul>" + "".join(follow_up_lines) + "</ul>" if follow_up_lines else "<p>• No outstanding follow-ups identified.</p>"
 
     # Build updates as HTML
     if updates:

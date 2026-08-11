@@ -104,6 +104,56 @@ def undo():
         return "<h2>✅ Restored! You can close this window.</h2>"
     return "Item not found", 404
 
+@app.route("/create_task")
+def create_task():
+    """Create a HubSpot task for a follow‑up item."""
+    item_hash = request.args.get("hash")
+    email = request.args.get("email")
+    title = request.args.get("title")
+    duedays = request.args.get("duedays", "3")
+    token = request.args.get("token")
+
+    if token != DONE_SECRET:
+        return "Unauthorized", 401
+    if not item_hash or not email or not title:
+        return "Missing parameters", 400
+
+    # Prevent duplicate tasks
+    tasks = load_created_tasks()
+    if item_hash in tasks:
+        return "<h2>⚠️ Task already created.</h2>"
+
+    # Find contact in HubSpot
+    hubspot = HubSpotClient()
+    contact_id = hubspot.get_contact_by_email(email)
+    if not contact_id:
+        return "<h2>❌ Contact not found in HubSpot. Cannot create task.</h2>", 404
+
+    # Calculate due date
+    from datetime import date, timedelta
+    due_date = (date.today() + timedelta(days=int(duedays))).isoformat()
+
+    success = hubspot.create_task(contact_id, title, due_date)
+    if success:
+        tasks[item_hash] = {"title": title, "due_date": due_date, "created": str(date.today())}
+        save_created_tasks(tasks)
+        return "<h2>✅ Task created in HubSpot! You can close this window.</h2>"
+    else:
+        return "<h2>❌ Failed to create task. Please try again.</h2>", 500
+
+CREATED_TASKS_FILE = "created_tasks.json"
+
+def load_created_tasks():
+    path = Path(CREATED_TASKS_FILE)
+    if path.exists():
+        with open(path, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_created_tasks(data):
+    with open(CREATED_TASKS_FILE, "w") as f:
+        json.dump(data, f, indent=2, default=str)
+
 @app.route("/approve_deal")
 def approve_deal():
     """Approve a deal stage suggestion: /approve_deal?id=...&token=..."""

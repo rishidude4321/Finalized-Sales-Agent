@@ -343,3 +343,42 @@ class HubSpotClient:
                 "employees": p.get("numberofemployees", ""),
             }
         return None
+
+    def get_contact_by_email(self, email: str) -> Optional[str]:
+        """Return contact ID for the given email, or None."""
+        endpoint = "/crm/v3/objects/contacts/search"
+        payload = {
+            "filterGroups": [{"filters": [{"propertyName": "email", "operator": "EQ", "value": email}]}],
+            "properties": ["email"],
+            "limit": 1,
+        }
+        data = self._make_request("POST", endpoint, json=payload)
+        if data and data.get("results"):
+            return data["results"][0]["id"]
+        return None
+
+    def create_task(self, contact_id: str, title: str, due_date_str: str) -> bool:
+        """
+        Create a task in HubSpot associated with the given contact.
+        due_date_str: ISO date string (e.g., '2026-08-14').
+        """
+        endpoint = "/crm/v3/objects/tasks"
+        payload = {
+            "properties": {
+                "hs_task_subject": title,
+                "hs_timestamp": due_date_str,  # due date
+                "hs_task_status": "NOT_STARTED",
+                "hs_task_priority": "MEDIUM",
+            },
+            "associations": [
+                {
+                    "to": {"id": contact_id},
+                    "types": [{"associationCategory": "HUBSPOT_DEFINED", "associationTypeId": 204}]
+                }
+            ],
+        }
+        result = self._make_request("POST", endpoint, json=payload)
+        if result:
+            print(f"   ✅ HubSpot task created: {title}")
+            return True
+        return False
