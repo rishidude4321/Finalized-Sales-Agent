@@ -15,9 +15,12 @@ from src.utils.config import DONE_SECRET, USER_EMAIL
 import urllib.parse
 from src.services.hubspot_client import HubSpotClient
 from src.services.draft_generator import DraftGenerator
+import json
+from pathlib import Path
 
 # constants
 DONE_FILE = "done_followups.json"
+DEAL_SUGGESTIONS_FILE = "deal_suggestions.json"
 
 # ---------- Local data classes ----------
 class FollowUpItem(BaseModel):
@@ -287,11 +290,11 @@ def save_done_items(data):
 def filter_done_follow_ups(items):
     """Remove follow‑ups that are soft‑deleted, and hard‑delete entries older than 7 days."""
     done = load_done_items()
-    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=7)
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)
     cleaned = {}
     for item_id, info in done.items():
         if info.get("deleted"):
-            deleted_at = datetime.datetime.fromisoformat(info["deleted_at"])
+            deleted_at = datetime.datetime.fromisoformat(info["deleted_at"]).replace(tzinfo=datetime.timezone.utc)
             if deleted_at < cutoff:
                 continue  # hard delete
             cleaned[item_id] = info
@@ -306,6 +309,102 @@ def filter_done_follow_ups(items):
             continue
         filtered.append(item)
     return filtered
+
+# ---------- Deal stage suggestions ----------
+def load_deal_suggestions():
+    path = Path(DEAL_SUGGESTIONS_FILE)
+    if path.exists():
+        with open(path, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_deal_suggestions(data):
+    with open(DEAL_SUGGESTIONS_FILE, "w") as f:
+        json.dump(data, f, indent=2, default=str)
+
+def generate_deal_suggestions(graph_client, hubspot_client):
+    """
+    Scan meetings from the last 24h, find associated open deals,
+    and generate stage‑advancement suggestions.
+    Returns a list of suggestion dicts.
+    """
+    import datetime
+    recent_events = graph_client.get_recent_events(days_back=1)
+    suggestions = []
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+
+    for event in recent_events:
+        # Only process events that have already started (meeting happened)
+        start_str = event.get("start", "")
+        if start_str:
+            try:
+                event_start = datetime.datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+                if event_start > now_utc:
+                    continue  # future meeting
+            except:
+                pass
+
+        for email in event.get("attendees", []):
+            if "@" not in email or email.endswith("@reachpathways.com"):
+                continue
+
+            # Find HubSpot contact by email
+            search_payload = {
+                "filterGroups": [{"filters": [{"propertyName": "email", "operator": "EQ", "value": email}]}],
+                "properties": ["firstname", "lastname"],
+                "limit": 1,
+            }
+            search_data = hubspot_client._make_request(
+                "POST", "/crm/v3/objects/contacts/search", json=search_payload
+            )
+            if not search_data or not search_data.get("results"):
+                continue
+
+            contact = search_data["results"][0]
+            contact_id = contact["id"]
+            first = contact["properties"].get("firstname", "")
+            last = contact["properties"].get("lastname", "")
+            contact_name = f"{first} {last}".strip()
+
+            deals = hubspot_client.get_contact_deals(contact_id)
+            for deal in deals:
+                next_stage_id = hubspot_client.get_next_stage_id(deal["stage_id"])
+                if not next_stage_id:
+                    continue  # already at final stage
+
+                suggestion_id = f"{event['id']}-{contact_id}-{deal['id']}"
+                existing_all = load_deal_suggestions()
+                existing = existing_all.get(suggestion_id)
+                if existing:
+                    # If the deal stage has changed since the last suggestion, allow a new one
+                    if existing.get("current_stage") == deal["stage_label"]:
+                        continue  # already suggested for this stage, skip
+                    # Stage changed — remove old and allow new suggestion
+                    del existing_all[suggestion_id]
+                    save_deal_suggestions(existing_all)
+
+                suggestion = {
+                    "id": suggestion_id,
+                    "deal_id": deal["id"],
+                    "deal_name": deal["name"],
+                    "contact_name": contact_name,
+                    "contact_email": email,
+                    "current_stage": deal["stage_label"],
+                    "next_stage_id": next_stage_id,
+                    "next_stage_label": hubspot_client.get_deal_stage_name(next_stage_id),
+                    "meeting_subject": event.get("subject", ""),
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "status": "pending",
+                }
+                suggestions.append(suggestion)
+
+    if suggestions:
+        current = load_deal_suggestions()
+        for s in suggestions:
+            current[s["id"]] = s
+        save_deal_suggestions(current)
+
+    return suggestions
 
 # ---------- Main ----------
 def main():
@@ -371,6 +470,23 @@ def main():
         )
     else:
         vague_text = "• No vague commitments needing review."
+
+    # Deal stage suggestions
+    deal_suggestions = generate_deal_suggestions(graph, hubspot)
+    # Deal stage suggestions HTML
+    if deal_suggestions:
+        deal_lines = []
+        for s in deal_suggestions:
+            approve = f"http://localhost:8500/approve_deal?id={s['id']}&token={DONE_SECRET}"
+            deny = f"http://localhost:8500/deny_deal?id={s['id']}&token={DONE_SECRET}"
+            deal_lines.append(
+                f'<li>{s["contact_name"]} ({s["contact_email"]}) – Deal: {s["deal_name"]} '
+                f'({s["current_stage"]} → {s["next_stage_label"]}) '
+                f'<a href="{approve}">[Approve]</a> <a href="{deny}">[Deny]</a></li>'
+            )
+        deal_sugg_text = "<ul>" + "".join(deal_lines) + "</ul>"
+    else:
+        deal_sugg_text = "<p>• No deal stage suggestions.</p>"
 
     today_date_str = datetime.date.today().strftime("%A, %B %d").replace(" 0", " ")
     follow_up_lines = []
@@ -462,6 +578,9 @@ def main():
 
 <h3>Needs Your Review (Vague commitments)</h3>
 {vague_text}
+
+<h3>DEAL STAGE SUGGESTIONS</h3>
+{deal_sugg_text}
 
 <hr>
 <p><em>Accidentally marked something done? <a href="{undo_link}">View recent changes.</a></em></p>

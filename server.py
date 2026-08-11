@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from flask import Flask, request, jsonify
-
+from src.services.hubspot_client import HubSpotClient
 from src.utils.config import DONE_SECRET
 
 app = Flask(__name__)
@@ -25,6 +25,19 @@ def load_data():
 def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=2)
+
+DEAL_SUGGESTIONS_FILE = "deal_suggestions.json"
+
+def load_deal_suggestions():
+    path = Path(DEAL_SUGGESTIONS_FILE)
+    if path.exists():
+        with open(path, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_deal_suggestions(data):
+    with open(DEAL_SUGGESTIONS_FILE, "w") as f:
+        json.dump(data, f, indent=2, default=str)
 
 def generate_hash(contact, action):
     raw = f"{contact}|{action}".lower().strip()
@@ -90,6 +103,47 @@ def undo():
         save_data(data)
         return "<h2>✅ Restored! You can close this window.</h2>"
     return "Item not found", 404
+
+@app.route("/approve_deal")
+def approve_deal():
+    """Approve a deal stage suggestion: /approve_deal?id=...&token=..."""
+    suggestion_id = request.args.get("id")
+    token = request.args.get("token")
+    if token != DONE_SECRET:
+        return "Unauthorized", 401
+
+    data = load_deal_suggestions()
+    if suggestion_id not in data:
+        return "Suggestion not found", 404
+
+    suggestion = data[suggestion_id]
+    if suggestion.get("status") != "pending":
+        return "Already processed", 200
+
+    # Update deal stage in HubSpot
+    hubspot = HubSpotClient()
+    success = hubspot.update_deal_stage(suggestion["deal_id"], suggestion["next_stage_id"])
+
+    if success:
+        suggestion["status"] = "approved"
+        save_deal_suggestions(data)
+        return "<h2>✅ Deal stage updated! You can close this window.</h2>"
+    else:
+        return "<h2>❌ Failed to update deal stage. Please try again.</h2>", 500
+
+@app.route("/deny_deal")
+def deny_deal():
+    """Deny a deal stage suggestion: /deny_deal?id=...&token=..."""
+    suggestion_id = request.args.get("id")
+    token = request.args.get("token")
+    if token != DONE_SECRET:
+        return "Unauthorized", 401
+
+    data = load_deal_suggestions()
+    if suggestion_id in data:
+        data[suggestion_id]["status"] = "denied"
+        save_deal_suggestions(data)
+    return "<h2>✅ Suggestion denied. You can close this window.</h2>"
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=8500, debug=False)

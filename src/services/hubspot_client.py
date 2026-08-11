@@ -45,7 +45,7 @@ class HubSpotClient:
             print(f"HubSpot API request failed: {e}")
             return None
 
-    def _load_pipeline_cache(self) -> Optional[Dict[str, str]]:
+    def _load_pipeline_cache(self) -> Optional[Dict[str, Dict]]:
         """Load cached pipeline stages if not expired."""
         cache_path = Path(self.PIPELINE_CACHE_FILE)
         if cache_path.exists():
@@ -65,17 +65,16 @@ class HubSpotClient:
             "timestamp": time.time(),
         }))
 
-    def _fetch_pipeline_stages(self) -> Dict[str, str]:
+    def _fetch_pipeline_stages(self) -> Dict[str, Dict]:
         """
-        Fetch all deal pipeline stages from HubSpot and return a mapping of
-        stage_id -> stage_label. Results are cached for 7 days.
+        Fetch all deal pipeline stages and return a mapping:
+        stage_id -> {"label": str, "displayOrder": int, "pipelineId": str}
+        Caches for 7 days.
         """
-        # Try cache first
         cached = self._load_pipeline_cache()
         if cached:
             return cached
 
-        # Fetch from API
         endpoint = "/crm/v3/pipelines/deals"
         data = self._make_request("GET", endpoint)
         if not data:
@@ -83,23 +82,98 @@ class HubSpotClient:
 
         stages = {}
         for pipeline in data.get("results", []):
+            pipeline_id = pipeline.get("id")
             for stage in pipeline.get("stages", []):
                 stage_id = stage.get("id", "")
-                stage_label = stage.get("label", "")
-                if stage_id and stage_label:
-                    stages[stage_id] = stage_label
+                label = stage.get("label", "")
+                order = stage.get("displayOrder", 0)
+                if stage_id:
+                    stages[stage_id] = {
+                        "label": label,
+                        "displayOrder": order,
+                        "pipelineId": pipeline_id,
+                    }
 
-        # Save to cache
         if stages:
             self._save_pipeline_cache(stages)
             print(f"✅ Cached {len(stages)} deal stages from HubSpot pipelines.")
 
         return stages
-
+    
     def get_deal_stage_name(self, stage_id: str) -> str:
         """Convert a stage ID to a human-readable name using the live pipeline data."""
         stages = self._fetch_pipeline_stages()
-        return stages.get(stage_id, stage_id.replace("_", " ").title())
+        stage_info = stages.get(stage_id)
+        if isinstance(stage_info, dict):
+            return stage_info.get("label", stage_id.replace("_", " ").title())
+        return stage_info or stage_id.replace("_", " ").title()
+
+    def get_next_stage_id(self, current_stage_id: str) -> Optional[str]:
+        """
+        Given a deal stage ID, return the ID of the next stage in the same pipeline
+        (based on displayOrder), or None if it's the last stage.
+        """
+        stages = self._fetch_pipeline_stages()
+        current = stages.get(current_stage_id)
+        if not current:
+            return None
+
+        pipeline_id = current["pipelineId"]
+        current_order = current["displayOrder"]
+
+        next_stage = None
+        next_order = None
+        for sid, info in stages.items():
+            if info["pipelineId"] == pipeline_id and info["displayOrder"] > current_order:
+                if next_order is None or info["displayOrder"] < next_order:
+                    next_order = info["displayOrder"]
+                    next_stage = sid
+        return next_stage
+
+    def get_contact_deals(self, contact_id: str) -> List[Dict]:
+        """
+        Retrieve open deals associated with a contact.
+        Returns list with id, name, stage_id, stage_label, amount.
+        """
+        endpoint = f"/crm/v3/objects/contacts/{contact_id}/associations/deals"
+        assoc_data = self._make_request("GET", endpoint)
+        if not assoc_data or not assoc_data.get("results"):
+            return []
+
+        deal_ids = [d["id"] for d in assoc_data["results"]]
+        if not deal_ids:
+            return []
+
+        deals_endpoint = "/crm/v3/objects/deals/batch/read"
+        payload = {
+            "properties": ["dealname", "dealstage", "amount"],
+            "inputs": [{"id": did} for did in deal_ids],
+        }
+        deals_data = self._make_request("POST", deals_endpoint, json=payload)
+        if not deals_data:
+            return []
+
+        deals = []
+        for deal in deals_data.get("results", []):
+            props = deal.get("properties", {})
+            stage_id = props.get("dealstage", "")
+            if stage_id in ("closedwon", "closedlost"):
+                continue
+            deals.append({
+                "id": deal["id"],
+                "name": props.get("dealname", "Unnamed Deal"),
+                "stage_id": stage_id,
+                "stage_label": self.get_deal_stage_name(stage_id),
+                "amount": props.get("amount", ""),
+            })
+        return deals
+
+    def update_deal_stage(self, deal_id: str, stage_id: str) -> bool:
+        """Update a deal's stage. Returns True on success."""
+        endpoint = f"/crm/v3/objects/deals/{deal_id}"
+        payload = {"properties": {"dealstage": stage_id}}
+        result = self._make_request("PATCH", endpoint, json=payload)
+        return result is not None
 
     def get_outstanding_deals(self, limit: int = 20) -> List[Dict]:
         """
