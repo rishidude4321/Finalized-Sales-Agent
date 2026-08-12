@@ -11,5 +11,70 @@
     "meeting_subject": "end meeting",
     "timestamp": "2026-08-11T11:51:23.245115",
     "status": "denied"
+  },
+  "AAMkADI5ZTUxYjQ4LWUzNGItNGFkMi1hMTNmLTRkNWUwODJmOTdmMgBGAAAAAAAwy1kLksUKTZc-5KLqKTuhBwAwvCqrE-m_RaOc7JjQpBf4AAAAAAENAAAwvCqrE-m_RaOc7JjQpBf4AAAUsS0yAAA=-532706697977-340227264190": {
+    "id": "AAMkADI5ZTUxYjQ4LWUzNGItNGFkMi1hMTNmLTRkNWUwODJmOTdmMgBGAAAAAAAwy1kLksUKTZc-5KLqKTuhBwAwvCqrE-m_RaOc7JjQpBf4AAAAAAENAAAwvCqrE-m_RaOc7JjQpBf4AAAUsS0yAAA=-532706697977-340227264190",
+    "deal_id": "340227264190",
+    "deal_name": "Purdue University - New Deal For President",
+    "contact_name": "Bob Johnson",
+    "contact_email": "rvira@purdue.edu",
+    "current_stage": "Presentation Scheduled",
+    "next_stage_id": "decisionmakerboughtin",
+    "next_stage_label": "Decision Maker Bought-In",
+    "meeting_subject": "Fake Meeting",
+    "timestamp": "2026-08-11T14:36:20.464139",
+    "status": "pending"
+  },
+  "AAMkADI5ZTUxYjQ4LWUzNGItNGFkMi1hMTNmLTRkNWUwODJmOTdmMgBGAAAAAAAwy1kLksUKTZc-5KLqKTuhBwAwvCqrE-m_RaOc7JjQpBf4AAAAAAENAAAwvCqrE-m_RaOc7JjQpBf4AAAUsS00AAA=-532706697977-340227264190": {
+    "id": "AAMkADI5ZTUxYjQ4LWUzNGItNGFkMi1hMTNmLTRkNWUwODJmOTdmMgBGAAAAAAAwy1kLksUKTZc-5KLqKTuhBwAwvCqrE-m_RaOc7JjQpBf4AAAAAAENAAAwvCqrE-m_RaOc7JjQpBf4AAAUsS00AAA=-532706697977-340227264190",
+    "deal_id": "340227264190",
+    "deal_name": "Purdue University - New Deal For President",
+    "contact_name": "Bob Johnson",
+    "contact_email": "rvira@purdue.edu",
+    "current_stage": "Presentation Scheduled",
+    "next_stage_id": "decisionmakerboughtin",
+    "next_stage_label": "Decision Maker Bought-In",
+    "meeting_subject": "Final Intern Report & Presentation",
+    "timestamp": "2026-08-11T18:56:29.569498",
+    "status": "pending"
+  },
+  "AAMkADI5ZTUxYjQ4LWUzNGItNGFkMi1hMTNmLTRkNWUwODJmOTdmMgBGAAAAAAAwy1kLksUKTZc-5KLqKTuhBwAwvCqrE-m_RaOc7JjQpBf4AAAAAAENAAAwvCqrE-m_RaOc7JjQpBf4AAAUsS02AAA=-532706697977-340227264190": {
+    "id": "AAMkADI5ZTUxYjQ4LWUzNGItNGFkMi1hMTNmLTRkNWUwODJmOTdmMgBGAAAAAAAwy1kLksUKTZc-5KLqKTuhBwAwvCqrE-m_RaOc7JjQpBf4AAAAAAENAAAwvCqrE-m_RaOc7JjQpBf4AAAUsS02AAA=-532706697977-340227264190",
+    "deal_id": "340227264190",
+    "deal_name": "Purdue University - New Deal For President",
+    "contact_name": "Bob Johnson",
+    "contact_email": "rvira@purdue.edu",
+    "current_stage": "Presentation Scheduled",
+    "next_stage_id": "decisionmakerboughtin",
+    "next_stage_label": "Decision Maker Bought-In",
+    "meeting_subject": "Fake Meeting",
+    "timestamp": "2026-08-11T18:58:57.644779",
+    "status": "pending"
+  },
+  "AAMkADI5ZTUxYjQ4LWUzNGItNGFkMi1hMTNmLTRkNWUwODJmOTdmMgBGAAAAAAAwy1kLksUKTZc-5KLqKTuhBwAwvCqrE-m_RaOc7JjQpBf4AAAAAAENAAAwvCqrE-m_RaOc7JjQpBf4AAAUsS04AAA=-532706697977-340227264190": {
+    "id": "AAMkADI5ZTUxYjQ4LWUzNGItNGFkMi1hMTNmLTRkNWUwODJmOTdmMgBGAAAAAAAwy1kLksUKTZc-5KLqKTuhBwAwvCqrE-m_RaOc7JjQpBf4AAAAAAENAAAwvCqrE-m_RaOc7JjQpBf4AAAUsS04AAA=-532706697977-340227264190",
+    "deal_id": "340227264190",
+    "deal_name": "Purdue University - New Deal For President",
+    "contact_name": "Bob Johnson",
+    "contact_email": "rvira@purdue.edu",
+    "current_stage": "Presentation Scheduled",
+    "next_stage_id": "decisionmakerboughtin",
+    "next_stage_label": "Decision Maker Bought-In",
+    "meeting_subject": "Fake Meeting",
+    "timestamp": "2026-08-11T19:05:23.143932",
+    "status": "pending"
+  },
+  "AAMkADI5ZTUxYjQ4LWUzNGItNGFkMi1hMTNmLTRkNWUwODJmOTdmMgBGAAAAAAAwy1kLksUKTZc-5KLqKTuhBwAwvCqrE-m_RaOc7JjQpBf4AAAAAAENAAAwvCqrE-m_RaOc7JjQpBf4AAAUsS07AAA=-532706697977-340227264190": {
+    "id": "AAMkADI5ZTUxYjQ4LWUzNGItNGFkMi1hMTNmLTRkNWUwODJmOTdmMgBGAAAAAAAwy1kLksUKTZc-5KLqKTuhBwAwvCqrE-m_RaOc7JjQpBf4AAAAAAENAAAwvCqrE-m_RaOc7JjQpBf4AAAUsS07AAA=-532706697977-340227264190",
+    "deal_id": "340227264190",
+    "deal_name": "Purdue University - New Deal For President",
+    "contact_name": "Bob Johnson",
+    "contact_email": "rvira@purdue.edu",
+    "current_stage": "Presentation Scheduled",
+    "next_stage_id": "decisionmakerboughtin",
+    "next_stage_label": "Decision Maker Bought-In",
+    "meeting_subject": "Fake Meeting",
+    "timestamp": "2026-08-11T19:09:37.368389",
+    "status": "approved"
   }
 }
