@@ -11,8 +11,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from flask import Flask, request, jsonify
 from src.services.hubspot_client import HubSpotClient
-from src.utils.config import DONE_SECRET
+from src.utils.config import DONE_SECRET, SUPPORT_EMAIL, AGENT_STATUS_FILE, CONTROL_CENTER_FLAG
 from src.services.conversation_tree import ConversationTreeBuilder
+import datetime
+from src.services.graph_client import GraphClient
+from src.services.hubspot_client import HubSpotClient
 
 app = Flask(__name__)
 DATA_FILE = Path("done_followups.json")
@@ -201,14 +204,175 @@ def view_conversation():
     """Serve the conversation tree as a standalone HTML page."""
     email = request.args.get("email")
     token = request.args.get("token")
+    days = request.args.get("days", default=30, type=int)
     if token != DONE_SECRET:
         return "Unauthorized", 401
     if not email:
         return "Missing email", 400
 
     builder = ConversationTreeBuilder()
-    html = builder.build_tree(email)
-    return f"<html><body>{html}</body></html>"
+    html = builder.build_tree_html(email, days)
+    return html
+
+def load_agent_status():
+    path = Path(AGENT_STATUS_FILE)
+    if path.exists():
+        with open(path, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_agent_status(data):
+    with open(AGENT_STATUS_FILE, "w") as f:
+        json.dump(data, f, indent=2, default=str)
+
+@app.route("/control")
+def control_center_page():
+    token = request.args.get("token")
+    if token != DONE_SECRET:
+        return "Unauthorized", 401
+    return """
+    <html><body>
+    <h2>🛰️ Sales Support Agent – Control Centre</h2>
+    <ul>
+      <li><a href="/tree?token={token}">📋 Open Conversation Tree</a></li>
+      <li><a href="/report?token={token}">⚠️ Report an Issue</a></li>
+      <li><a href="/request?token={token}">💡 Request Automation</a></li>
+      <li><a href="/health?token={token}">🩺 Health Check</a></li>
+    </ul>
+    </body></html>
+    """.format(token=token)
+
+@app.route("/tree")
+def tree_search_page():
+    token = request.args.get("token")
+    if token != DONE_SECRET:
+        return "Unauthorized", 401
+
+    # Build list of recent external contacts to populate datalist
+    graph = GraphClient()
+    recent_emails = graph.get_recent_emails(days=30, top=200)
+    contact_options = []
+    seen = set()
+    for mail in recent_emails:
+        addr = mail.get("from_address", "")
+        if addr and "@" in addr and not addr.endswith("@reachpathways.com") and addr not in seen:
+            seen.add(addr)
+            contact_options.append(f'<option value="{addr}">')
+    datalist = "\n".join(contact_options)
+
+    return f"""
+    <html><body>
+    <h2>📋 Conversation Tree</h2>
+    <p>Enter the contact's email address:</p>
+    <form action="/conversation" method="GET">
+      <input type="hidden" name="token" value="{token}">
+      <input list="contact-list" name="email" placeholder="e.g. bob@acme.com" required>
+      <datalist id="contact-list">
+        {datalist}
+      </datalist>
+      <button type="submit">View Tree</button>
+    </form>
+    </body></html>
+    """
+
+@app.route("/health")
+def health_page():
+    token = request.args.get("token")
+    if token != DONE_SECRET:
+        return "Unauthorized", 401
+    status = load_agent_status()
+    last_briefing = status.get("last_briefing_time", "Never")
+    last_prep = status.get("last_meeting_prep_time", "Never")
+    followups_today = status.get("followups_today", 0)
+    drafts_today = status.get("drafts_today", 0)
+    tasks_created = status.get("tasks_created", 0)
+    errors = status.get("error_count", 0)
+    return f"""
+    <html><body>
+    <h2>🩺 Agent Health</h2>
+    <ul>
+      <li><strong>Server:</strong> Running</li>
+      <li><strong>Last Daily Briefing:</strong> {last_briefing}</li>
+      <li><strong>Last Meeting Prep:</strong> {last_prep}</li>
+      <li><strong>Follow‑ups detected today:</strong> {followups_today}</li>
+      <li><strong>Drafts created today:</strong> {drafts_today}</li>
+      <li><strong>HubSpot tasks created:</strong> {tasks_created}</li>
+      <li><strong>Recent error count:</strong> {errors}</li>
+    </ul>
+    </body></html>
+    """
+
+@app.route("/report")
+def report_form():
+    token = request.args.get("token")
+    if token != DONE_SECRET:
+        return "Unauthorized", 401
+    return f"""
+    <html><body>
+    <h2>⚠️ Report an Issue</h2>
+    <form action="/submit_report" method="POST">
+      <input type="hidden" name="token" value="{token}">
+      <p>What went wrong?</p>
+      <textarea name="message" rows="6" cols="60" required></textarea><br>
+      <button type="submit">Submit to Rishi</button>
+    </form>
+    </body></html>
+    """
+
+@app.route("/submit_report", methods=["POST"])
+def submit_report():
+    token = request.form.get("token")
+    if token != DONE_SECRET:
+        return "Unauthorized", 401
+    message = request.form.get("message", "")
+    if not message.strip():
+        return "Message cannot be empty", 400
+    graph = GraphClient()
+    success = graph.send_mail(
+        to=SUPPORT_EMAIL,
+        subject="Sales Agent Issue Report",
+        body=f"Issue reported at {datetime.datetime.now()}:\n\n{message}",
+        content_type="Text",
+    )
+    if success:
+        return "<h2>✅ Report sent. Thank you!</h2>"
+    return "<h2>❌ Failed to send report. Please try again.</h2>", 500
+
+@app.route("/request")
+def request_form():
+    token = request.args.get("token")
+    if token != DONE_SECRET:
+        return "Unauthorized", 401
+    return f"""
+    <html><body>
+    <h2>💡 Request Automation</h2>
+    <form action="/submit_request" method="POST">
+      <input type="hidden" name="token" value="{token}">
+      <p>What repetitive task do you want automated?</p>
+      <textarea name="message" rows="6" cols="60" required></textarea><br>
+      <button type="submit">Send Request</button>
+    </form>
+    </body></html>
+    """
+
+@app.route("/submit_request", methods=["POST"])
+def submit_request():
+    token = request.form.get("token")
+    if token != DONE_SECRET:
+        return "Unauthorized", 401
+    message = request.form.get("message", "")
+    if not message.strip():
+        return "Message cannot be empty", 400
+    graph = GraphClient()
+    success = graph.send_mail(
+        to=SUPPORT_EMAIL,
+        subject="Sales Agent Automation Request",
+        body=f"Automation request at {datetime.datetime.now()}:\n\n{message}",
+        content_type="Text",
+    )
+    if success:
+        return "<h2>✅ Request sent. Thank you!</h2>"
+    return "<h2>❌ Failed to send request. Please try again.</h2>", 500
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=8500, debug=False)

@@ -99,7 +99,10 @@ class GraphClient:
                 response = requests.request(method, url, headers=headers, **kwargs)
 
         if response.ok:
-            return response.json()
+            try:
+                return response.json()
+            except ValueError:
+                return {}
         else:
             # Log the error and return None; caller should handle gracefully
             print(f"Graph API error {response.status_code}: {response.text}")
@@ -139,58 +142,88 @@ class GraphClient:
             })
         return emails
 
-    def get_emails_with_contact(self, email: str, days: int = 180, top: int = 100) -> List[Dict]:
+    def get_emails_with_contact(self, email: str, days: int = 180, top: int = 1000) -> List[Dict]:
         """
         Retrieve emails exchanged with a specific contact, including CC.
-        Returns sent + received messages sorted by receivedDateTime ascending.
+        Uses simple supported filters only; recipient/CC and date filtering are done locally.
         """
         import datetime
+
+        email_lower = email.lower().strip()
         since = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        # Build filter: messages from the contact OR where contact is a recipient/CC
-        filter_str = (
-            f"from/emailAddress/address eq '{email}' or "
-            f"toRecipients/any(r: r/emailAddress/address eq '{email}') or "
-            f"ccRecipients/any(r: r/emailAddress/address eq '{email}')"
-        )
-
-        endpoint = (
-            "https://graph.microsoft.com/v1.0/me/messages"
-            f"?$filter=({filter_str}) and receivedDateTime ge {since}"
-            f"&$orderby=receivedDateTime asc"
+        # 1) Inbox messages from this sender (no date or orderby filter)
+        inbox_endpoint = (
+            "https://graph.microsoft.com/v1.0/me/mailFolders('Inbox')/messages"
+            f"?$filter=from/emailAddress/address eq '{email_lower}'"
             f"&$top={top}"
-            "&$select=conversationId,from,toRecipients,ccRecipients,subject,bodyPreview,receivedDateTime"
+            "&$select=conversationId,from,toRecipients,ccRecipients,subject,bodyPreview,receivedDateTime,webLink"
         )
+        inbox_data = self._make_request("GET", inbox_endpoint)
+        inbox_messages = inbox_data.get("value", []) if inbox_data else []
 
-        data = self._make_request("GET", endpoint)
-        if not data:
-            return []
+        # 2) Sent items from last `days` days; recipient/CC matched locally
+        sent_endpoint = (
+            "https://graph.microsoft.com/v1.0/me/mailFolders('SentItems')/messages"
+            f"?$filter=sentDateTime ge {since}"
+            f"&$top={top}"
+            "&$select=conversationId,from,toRecipients,ccRecipients,subject,bodyPreview,receivedDateTime,sentDateTime,webLink"
+        )
+        sent_data = self._make_request("GET", sent_endpoint)
+        sent_messages = sent_data.get("value", []) if sent_data else []
 
         messages = []
-        for msg in data.get("value", []):
+
+        # Inbox messages are all from the contact; apply local date filter only
+        for msg in inbox_messages:
+            received = msg.get("receivedDateTime", "")
+            if received and received < since:
+                continue
             sender_obj = msg.get("from", {}).get("emailAddress", {})
             sender = sender_obj.get("address", "unknown")
             sender_name = sender_obj.get("name", "")
-            recipients = [r.get("emailAddress", {}).get("address", "") for r in msg.get("toRecipients", [])]
-            cc = [r.get("emailAddress", {}).get("address", "") for r in msg.get("ccRecipients", [])]
+            messages.append(self._format_email_message(msg, email_lower, sender, sender_name, "from", date_value=received))
 
-            direction = "from" if sender.lower() == email.lower() else "to"
+        # Sent messages where the contact is in To or CC
+        for msg in sent_messages:
+            sent_dt = msg.get("sentDateTime", "") or msg.get("receivedDateTime", "")
+            if sent_dt and sent_dt < since:
+                continue
+            to_emails = [r.get("emailAddress", {}).get("address", "").lower() for r in msg.get("toRecipients", [])]
+            cc_emails = [r.get("emailAddress", {}).get("address", "").lower() for r in msg.get("ccRecipients", [])]
+            if email_lower in to_emails or email_lower in cc_emails:
+                sender_obj = msg.get("from", {}).get("emailAddress", {})
+                sender = sender_obj.get("address", "unknown")
+                sender_name = sender_obj.get("name", "")
+                messages.append(self._format_email_message(msg, email_lower, sender, sender_name, "to", date_value=sent_dt))
 
-            messages.append({
-                "id": msg["id"],
-                "conversationId": msg.get("conversationId", ""),
-                "subject": msg.get("subject", "(no subject)"),
-                "sender": sender,
-                "sender_name": sender_name,
-                "direction": direction,
-                "recipients": recipients,
-                "cc": cc,
-                "preview": msg.get("bodyPreview", "")[:200],
-                "received": msg.get("receivedDateTime", ""),
-            })
+        # Deduplicate by message ID, then sort by date ascending
+        seen = set()
+        unique = []
+        for m in messages:
+            if m["id"] not in seen:
+                seen.add(m["id"])
+                unique.append(m)
+        unique.sort(key=lambda x: x.get("received", ""))
+        return unique
 
-        messages.sort(key=lambda x: x.get("received", ""))
-        return messages
+    def _format_email_message(self, msg: Dict, contact_email: str, sender: str, sender_name: str, direction: str, date_value: str = None) -> Dict:
+        """Format a Graph message into our conversation event structure."""
+        recipients = [r.get("emailAddress", {}).get("address", "") for r in msg.get("toRecipients", [])]
+        cc = [r.get("emailAddress", {}).get("address", "") for r in msg.get("ccRecipients", [])]
+        return {
+            "id": msg["id"],
+            "conversationId": msg.get("conversationId", ""),
+            "subject": msg.get("subject", "(no subject)"),
+            "sender": sender,
+            "sender_name": sender_name,
+            "direction": direction,
+            "recipients": recipients,
+            "cc": cc,
+            "preview": msg.get("bodyPreview", "")[:200],
+            "received": date_value or msg.get("receivedDateTime", ""),
+            "webLink": msg.get("webLink", ""),
+        }
 
     def get_recent_conversations(self, days=14) -> List[Dict]:
         """
@@ -458,4 +491,44 @@ class GraphClient:
                 "end": end_str,
                 "attendees": attendees,
             })
+        return events
+
+    def get_events_with_attendee(self, email: str, days: int = 365, top: int = 500) -> List[Dict]:
+        """
+        Retrieve calendar events where the given email was an attendee.
+        Returns event id, subject, start, end, attendees, webLink.
+        """
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        start_dt = now - datetime.timedelta(days=days)
+        end_dt = now + datetime.timedelta(days=30)   # include upcoming near-term meetings
+
+        params = {
+            "startDateTime": start_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "endDateTime": end_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "$select": "id,subject,start,end,attendees,webLink",
+            "$top": top,
+        }
+        endpoint = "https://graph.microsoft.com/v1.0/me/calendarView"
+        data = self._make_request("GET", endpoint, params=params)
+        if not data:
+            return []
+
+        target = email.lower().strip()
+        events = []
+        for event in data.get("value", []):
+            attendees = event.get("attendees", [])
+            attendee_emails = [a.get("emailAddress", {}).get("address", "").lower() for a in attendees]
+            if target not in attendee_emails:
+                continue
+            events.append({
+                "id": event["id"],
+                "subject": event.get("subject", "No Subject"),
+                "start": event.get("start", {}).get("dateTime", ""),
+                "end": event.get("end", {}).get("dateTime", ""),
+                "attendees": [a.get("emailAddress", {}).get("address", "") for a in attendees],
+                "webLink": event.get("webLink", ""),
+            })
+        # Sort by start date descending (most recent first)
+        events.sort(key=lambda x: x.get("start", ""), reverse=True)
         return events

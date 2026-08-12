@@ -1,7 +1,7 @@
 """
-Conversation Tree Builder for Module 6.
-Generates a deterministic HTML timeline of interactions with a contact.
-Cached per contact for 24 hours.
+Conversation Tree Builder – Module 6
+Groups emails into threads, shows meetings and HubSpot activity,
+and produces a clean HTML view with time-range selector.
 """
 
 import json
@@ -10,10 +10,11 @@ from pathlib import Path
 from typing import List, Dict
 from src.services.graph_client import GraphClient
 from src.services.hubspot_client import HubSpotClient
+from src.utils.config import DONE_SECRET
 
 CACHE_FILE = "conversation_cache.json"
-CACHE_TTL = 86400  # 24 hours
-MAX_EVENTS = 25
+CACHE_TTL = 86400  # 24 hours per (email, days) cache entry
+MAX_EVENTS_PER_THREAD = 20
 
 
 class ConversationTreeBuilder:
@@ -35,77 +36,209 @@ class ConversationTreeBuilder:
         with open(CACHE_FILE, "w") as f:
             json.dump(self.cache, f, indent=2, default=str)
 
-    def build_tree(self, email: str) -> str:
-        """Return an HTML tree for the given contact email. Cached."""
-        email_lower = email.lower().strip()
+    def _is_noise_email(self, mail: Dict) -> bool:
+        """Filter automated meeting notifications and other noise."""
+        subject = mail.get("subject", "").lower()
+        preview = mail.get("preview", "").lower()
+        # Meeting invitation/cancellation/response subjects
+        noise_phrases = [
+            "accepted:", "declined:", "tentative:", "canceled:", "cancelled:",
+            "meeting-id", "passcode", "teams meeting", "join the meeting",
+            "microsoft teams meeting", "meeting invitation",
+        ]
+        for phrase in noise_phrases:
+            if phrase in subject:
+                return True
+        # If it looks like a Teams meeting body, skip
+        if "teams.microsoft.com" in preview:
+            return True
+        return False
 
-        # Check cache
-        entry = self.cache.get(email_lower)
-        if entry and (time.time() - entry.get("ts", 0)) < CACHE_TTL:
-            return entry["html"]
+    def _group_emails_into_threads(self, emails: List[Dict]) -> List[Dict]:
+        """Group messages into conversation threads using conversationId or subject."""
+        threads_by_id = {}
+        threads_by_subject = {}
 
-        # Fetch data
-        contact_id = self.hubspot.get_contact_by_email(email)
-        emails = self.graph.get_emails_with_contact(email)
-        engagements = self.hubspot.get_contact_engagements(contact_id) if contact_id else []
-
-        # Merge events
-        events = []
         for mail in emails:
-            direction = "→" if mail["direction"] == "to" else "←"
-            events.append({
-                "date": mail.get("received", "")[:10],
-                "icon": "📧",
-                "text": f'{direction} {mail["subject"]}',
-            })
+            if self._is_noise_email(mail):
+                continue
+            cid = mail.get("conversationId", "")
+            if cid:
+                if cid not in threads_by_id:
+                    threads_by_id[cid] = {
+                        "conversationId": cid,
+                        "subject": mail.get("subject", "(no subject)"),
+                        "messages": [],
+                    }
+                threads_by_id[cid]["messages"].append(mail)
+                # update subject to the most recent (last message after sort)
+            else:
+                # fallback group by normalized subject
+                norm_subject = mail.get("subject", "").strip()
+                # strip common prefixes
+                for prefix in ["re:", "fw:", "fwd:"]:
+                    if norm_subject.lower().startswith(prefix):
+                        norm_subject = norm_subject[3:].strip()
+                if norm_subject not in threads_by_subject:
+                    threads_by_subject[norm_subject] = {
+                        "conversationId": None,
+                        "subject": mail.get("subject", "(no subject)"),
+                        "messages": [],
+                    }
+                threads_by_subject[norm_subject]["messages"].append(mail)
 
-        for eng in engagements:
-            icon = "📝" if eng["type"] == "note" else "📋"
-            events.append({
-                "date": eng.get("timestamp", "")[:10],
-                "icon": icon,
-                "text": eng.get("content", ""),
-            })
+        # Merge fallback threads into main list
+        all_threads = list(threads_by_id.values())
+        for subject_key, thread in threads_by_subject.items():
+            all_threads.append(thread)
 
-        events.sort(key=lambda x: x.get("date", ""))
+        # Sort messages within each thread by received date ascending
+        for thread in all_threads:
+            thread["messages"].sort(key=lambda x: x.get("received", ""))
 
-        # Limit and optionally summarise
-        total = len(events)
-        if total > MAX_EVENTS:
-            events = events[:MAX_EVENTS]
-            summary = f"(Showing first {MAX_EVENTS} of {total} events)"
-        else:
-            summary = ""
+        # Sort threads by most recent message date descending
+        all_threads.sort(
+            key=lambda t: t["messages"][-1].get("received", "") if t["messages"] else "",
+            reverse=True,
+        )
+        return all_threads
 
-        # Build HTML
-        html_parts = [f'<h2>📋 Conversation History: {email}</h2>']
-        if summary:
-            html_parts.append(f'<p><em>{summary}</em></p>')
+    def _format_thread_html(self, thread: Dict) -> str:
+        """Return an HTML details/summary card for an email thread."""
+        msgs = thread.get("messages", [])
+        if not msgs:
+            return ""
 
-        html_parts.append('<table style="border-collapse:collapse; width:100%">')
-        for ev in events:
+        first_date = msgs[0].get("received", "")[:10] if msgs else ""
+        last_date = msgs[-1].get("received", "")[:10] if msgs else ""
+        count = len(msgs)
+        subject = thread.get("subject", "(no subject)")
+
+        # Build summary text
+        summary = f"📧 {subject} | Messages: {count}"
+        if first_date and last_date:
+            summary += f" | {first_date} → {last_date}"
+
+        html_parts = [f'<details><summary style="cursor:pointer; font-weight:600;">{summary}</summary>']
+
+        html_parts.append('<table style="border-collapse:collapse; width:100%; margin-top:6px;">')
+        for msg in msgs:
+            direction = msg.get("direction", "to")
+            if direction == "to":
+                chip = '<span style="color:#2b6cb0; font-weight:600;">You → Them</span>'
+            else:
+                chip = '<span style="color:#2f855a; font-weight:600;">Them → You</span>'
+            date = msg.get("received", "")[:10]
+            subject_line = msg.get("subject", "")
+            web_link = msg.get("webLink", "")
+            if web_link:
+                subject_link = f'<a href="{web_link}" target="_blank">{subject_line}</a>'
+            else:
+                subject_link = subject_line
             html_parts.append(
                 f'<tr>'
-                f'<td style="padding:4px 8px; white-space:nowrap">{ev["date"]}</td>'
-                f'<td>{ev["icon"]}</td>'
-                f'<td>{ev["text"]}</td>'
+                f'<td style="padding:4px 8px; white-space:nowrap; color:#666;">{date}</td>'
+                f'<td>{chip}</td>'
+                f'<td>{subject_link}</td>'
                 f'</tr>'
             )
         html_parts.append('</table>')
+        html_parts.append('</details>')
+        return "\n".join(html_parts)
 
-        html = "\n".join(html_parts)
-
-        # Save cache
-        self.cache[email_lower] = {"ts": time.time(), "html": html}
-        self._save_cache()
+    def _format_meeting_html(self, event: Dict) -> str:
+        """Return an HTML card for a calendar meeting."""
+        subject = event.get("subject", "No Subject")
+        start = event.get("start", "")
+        date = start[:10] if start else "unknown"
+        attendees = ", ".join(event.get("attendees", []))
+        web_link = event.get("webLink", "")
+        if web_link:
+            open_link = f'<a href="{web_link}" target="_blank">[Open in Outlook]</a>'
+        else:
+            open_link = ""
+        html = f'<div style="margin:8px 0;">📅 <strong>{subject}</strong><br>'
+        html += f'<span style="color:#555;">Date: {date}</span><br>'
+        html += f'<span style="color:#555;">Attendees: {attendees}</span> '
+        html += open_link
+        html += '</div>'
         return html
 
-    def build_collapsible_section(self, email: str) -> str:
-        """Return a collapsible HTML block for the meeting prep note."""
-        tree_html = self.build_tree(email)
-        return (
-            "<details>"
-            "<summary>📋 Conversation History (click to expand)</summary>"
-            f"{tree_html}"
-            "</details>"
-        )
+    def _format_hubspot_html(self, engagements: List[Dict]) -> str:
+        """Return HTML for HubSpot notes/tasks."""
+        if not engagements:
+            return ""
+        html_parts = ['<div style="margin-top:12px;">']
+        html_parts.append('<h3>📝 HubSpot Activity</h3>')
+        for eng in engagements:
+            date = eng.get("timestamp", "")[:10]
+            icon = "📋" if eng.get("type") == "task" else "📝"
+            content = eng.get("content", "")
+            html_parts.append(f'<div style="margin:4px 0;">{icon} {date}: {content}</div>')
+        html_parts.append('</div>')
+        return "\n".join(html_parts)
+
+    def build_tree_html(self, email: str, days: int = 30) -> str:
+        """
+        Build the full HTML conversation tree for a contact.
+        Includes time-range selector, email threads, meetings, and HubSpot activity.
+        """
+        email_lower = email.lower().strip()
+        cache_key = f"{email_lower}:{days}"
+        cached = self.cache.get(cache_key)
+        if cached and (time.time() - cached.get("ts", 0)) < CACHE_TTL:
+            return cached["html"]
+
+        # Fetch data
+        contact_id = self.hubspot.get_contact_by_email(email_lower)
+        emails = self.graph.get_emails_with_contact(email_lower, days=days)
+        meetings = self.graph.get_events_with_attendee(email_lower, days=days)
+        engagements = self.hubspot.get_contact_engagements(contact_id) if contact_id else []
+
+        # Group emails
+        threads = self._group_emails_into_threads(emails)
+
+        # Build HTML
+        html = [f'<html><body style="font-family: Segoe UI, Arial, sans-serif;">']
+        html.append(f'<h2>📋 Conversation History: {email_lower}</h2>')
+
+        # Time range selector
+        base_url = "/conversation"
+        ranges = [("7 days", 7), ("30 days", 30), ("3 months", 90), ("1 year", 365), ("All time", 3650)]
+        html.append('<p><strong>Time range:</strong> ')
+        links = []
+        for label, d in ranges:
+            if d == days:
+                links.append(f'<strong>{label}</strong>')
+            else:
+                links.append(f'<a href="{base_url}?email={email_lower}&days={d}&token={DONE_SECRET}">{label}</a>')
+        html.append(' | '.join(links))
+        html.append('</p>')
+
+        # Email threads
+        html.append('<h3>📁 Email Threads</h3>')
+        if threads:
+            for thread in threads:
+                html.append(self._format_thread_html(thread))
+        else:
+            html.append('<p>No email history found in this range.</p>')
+
+        # Meetings
+        html.append('<h3>📅 Meetings</h3>')
+        if meetings:
+            for event in meetings:
+                html.append(self._format_meeting_html(event))
+        else:
+            html.append('<p>No meetings found.</p>')
+
+        # HubSpot activity
+        html.append(self._format_hubspot_html(engagements))
+
+        html.append('</body></html>')
+
+        full_html = "\n".join(html)
+
+        # Save cache
+        self.cache[cache_key] = {"ts": time.time(), "html": full_html}
+        self._save_cache()
+        return full_html

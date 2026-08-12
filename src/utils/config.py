@@ -47,3 +47,10 @@ DONE_SECRET = os.getenv("DONE_SECRET", "sasha-sales-agent-2026")
 
 # Serper.dev API key for company enrichment (free tier: 2,500 queries)
 SERPER_API_KEY = os.getenv("SERPER_API_KEY", "")
+
+# Support / feedback email
+SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "rishivira4321@gmail.com")  # change to your email
+
+# State files
+AGENT_STATUS_FILE = "agent_status.json"
+CONTROL_CENTER_FLAG = "control_center_sent.flag"

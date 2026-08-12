@@ -11,13 +11,14 @@ import json
 from pydantic import BaseModel
 from src.services.graph_client import GraphClient
 import hashlib
-from src.utils.config import DONE_SECRET, USER_EMAIL
+from src.utils.config import DONE_SECRET, USER_EMAIL, CONTROL_CENTER_FLAG, AGENT_STATUS_FILE
 import urllib.parse
 from src.services.hubspot_client import HubSpotClient
 from src.services.draft_generator import DraftGenerator
 import json
 from pathlib import Path
 import urllib.parse
+from src.services.control_center import send_control_center_email
 
 # constants
 DONE_FILE = "done_followups.json"
@@ -652,6 +653,17 @@ def main():
 
     # Create Outlook draft as HTML
     graph.create_draft(to=USER_EMAIL, subject="Daily Briefing", body=briefing, content_type="HTML")
+        # Send control centre email once
+    import os
+    from pathlib import Path
+    flag = Path(CONTROL_CENTER_FLAG)
+    if not flag.exists():
+        print("🛰️ Sending one-time control centre email...")
+        if send_control_center_email():
+            flag.touch()
+            print("   ✅ Control centre email created.")
+        else:
+            print("   ⚠️ Failed to create control centre email.")
     
     # 5. Meeting Prep (process new events)
     print("🔄 Running meeting prep...")
@@ -672,6 +684,27 @@ def main():
     if processed > 0:  # only if we processed new meetings (meaning watcher missed them)
         # The watcher should handle this, but we can also run it now
         pass  # We'll rely on the watcher for real‑time, but can add a manual run here later
+
+    def load_agent_status():
+        path = Path(AGENT_STATUS_FILE)
+        if path.exists():
+            with open(path, "r") as f:
+                return json.load(f)
+        return {}
+
+    def save_agent_status(data):
+        with open(AGENT_STATUS_FILE, "w") as f:
+            json.dump(data, f, indent=2, default=str)
+
+    # Update agent status
+    status = load_agent_status()
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    status["last_briefing_time"] = now_str
+    status["followups_today"] = len(follow_ups)
+    # Increment draft count if we created any today
+    status["drafts_today"] = status.get("drafts_today", 0) + 1  # daily briefing draft
+    # You can add more tracking later
+    save_agent_status(status)
 
 if __name__ == "__main__":
     main()
