@@ -382,3 +382,63 @@ class HubSpotClient:
             print(f"   ✅ HubSpot task created: {title}")
             return True
         return False
+
+    def get_contact_engagements(self, contact_id: str, limit: int = 20) -> List[Dict]:
+        """
+        Retrieve recent notes and tasks associated with a contact.
+        Uses association endpoints + batch reads for reliability.
+        """
+        engagements = []
+
+        # Notes
+        notes_assoc = self._make_request(
+            "GET", f"/crm/v3/objects/contacts/{contact_id}/associations/notes"
+        )
+        if notes_assoc and notes_assoc.get("results"):
+            note_ids = [item["id"] for item in notes_assoc["results"]]
+            if note_ids:
+                notes_payload = {
+                    "properties": ["hs_note_body", "hs_timestamp"],
+                    "inputs": [{"id": nid} for nid in note_ids],
+                }
+                notes_data = self._make_request(
+                    "POST", "/crm/v3/objects/notes/batch/read", json=notes_payload
+                )
+                if notes_data:
+                    for note in notes_data.get("results", []):
+                        props = note.get("properties", {})
+                        ts = props.get("hs_timestamp", "")
+                        content = props.get("hs_note_body", "")
+                        engagements.append({
+                            "type": "note",
+                            "timestamp": ts,
+                            "content": content[:300],
+                        })
+
+        # Tasks
+        tasks_assoc = self._make_request(
+            "GET", f"/crm/v3/objects/contacts/{contact_id}/associations/tasks"
+        )
+        if tasks_assoc and tasks_assoc.get("results"):
+            task_ids = [item["id"] for item in tasks_assoc["results"]]
+            if task_ids:
+                tasks_payload = {
+                    "properties": ["hs_task_subject", "hs_timestamp"],
+                    "inputs": [{"id": tid} for tid in task_ids],
+                }
+                tasks_data = self._make_request(
+                    "POST", "/crm/v3/objects/tasks/batch/read", json=tasks_payload
+                )
+                if tasks_data:
+                    for task in tasks_data.get("results", []):
+                        props = task.get("properties", {})
+                        ts = props.get("hs_timestamp", "")
+                        content = props.get("hs_task_subject", "Task")
+                        engagements.append({
+                            "type": "task",
+                            "timestamp": ts,
+                            "content": content[:300],
+                        })
+
+        engagements.sort(key=lambda x: x.get("timestamp") or "")
+        return engagements[:limit]

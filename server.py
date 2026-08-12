@@ -12,6 +12,7 @@ from pathlib import Path
 from flask import Flask, request, jsonify
 from src.services.hubspot_client import HubSpotClient
 from src.utils.config import DONE_SECRET
+from src.services.conversation_tree import ConversationTreeBuilder
 
 app = Flask(__name__)
 DATA_FILE = Path("done_followups.json")
@@ -194,6 +195,20 @@ def deny_deal():
         data[suggestion_id]["status"] = "denied"
         save_deal_suggestions(data)
     return "<h2>✅ Suggestion denied. You can close this window.</h2>"
+
+@app.route("/conversation")
+def view_conversation():
+    """Serve the conversation tree as a standalone HTML page."""
+    email = request.args.get("email")
+    token = request.args.get("token")
+    if token != DONE_SECRET:
+        return "Unauthorized", 401
+    if not email:
+        return "Missing email", 400
+
+    builder = ConversationTreeBuilder()
+    html = builder.build_tree(email)
+    return f"<html><body>{html}</body></html>"
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=8500, debug=False)

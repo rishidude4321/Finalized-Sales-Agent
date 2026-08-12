@@ -110,8 +110,8 @@ class GraphClient:
         Retrieve recent messages from the inbox (read and unread) from the last `days` days.
         Returns up to `top` messages, ordered by receivedDateTime desc.
         """
-        from datetime import datetime, timedelta
-        since = (datetime.utcnow() - timedelta(days=days)).isoformat() + "Z"
+        from datetime import datetime, timedelta, timezone
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         endpoint = (
             "https://graph.microsoft.com/v1.0/me/mailFolders('Inbox')/messages"
@@ -139,14 +139,67 @@ class GraphClient:
             })
         return emails
 
+    def get_emails_with_contact(self, email: str, days: int = 180, top: int = 100) -> List[Dict]:
+        """
+        Retrieve emails exchanged with a specific contact, including CC.
+        Returns sent + received messages sorted by receivedDateTime ascending.
+        """
+        import datetime
+        since = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Build filter: messages from the contact OR where contact is a recipient/CC
+        filter_str = (
+            f"from/emailAddress/address eq '{email}' or "
+            f"toRecipients/any(r: r/emailAddress/address eq '{email}') or "
+            f"ccRecipients/any(r: r/emailAddress/address eq '{email}')"
+        )
+
+        endpoint = (
+            "https://graph.microsoft.com/v1.0/me/messages"
+            f"?$filter=({filter_str}) and receivedDateTime ge {since}"
+            f"&$orderby=receivedDateTime asc"
+            f"&$top={top}"
+            "&$select=conversationId,from,toRecipients,ccRecipients,subject,bodyPreview,receivedDateTime"
+        )
+
+        data = self._make_request("GET", endpoint)
+        if not data:
+            return []
+
+        messages = []
+        for msg in data.get("value", []):
+            sender_obj = msg.get("from", {}).get("emailAddress", {})
+            sender = sender_obj.get("address", "unknown")
+            sender_name = sender_obj.get("name", "")
+            recipients = [r.get("emailAddress", {}).get("address", "") for r in msg.get("toRecipients", [])]
+            cc = [r.get("emailAddress", {}).get("address", "") for r in msg.get("ccRecipients", [])]
+
+            direction = "from" if sender.lower() == email.lower() else "to"
+
+            messages.append({
+                "id": msg["id"],
+                "conversationId": msg.get("conversationId", ""),
+                "subject": msg.get("subject", "(no subject)"),
+                "sender": sender,
+                "sender_name": sender_name,
+                "direction": direction,
+                "recipients": recipients,
+                "cc": cc,
+                "preview": msg.get("bodyPreview", "")[:200],
+                "received": msg.get("receivedDateTime", ""),
+            })
+
+        messages.sort(key=lambda x: x.get("received", ""))
+        return messages
+
     def get_recent_conversations(self, days=14) -> List[Dict]:
         """
         Retrieve recent sent emails and the corresponding replies to build
         a conversation log for follow-up tracking.
         Returns a list of threads, each with participants, last message date, and a snippet.
         """
-        from datetime import datetime, timedelta
-        since = (datetime.utcnow() - timedelta(days=days)).isoformat() + "Z"
+        from datetime import datetime, timedelta, timezone
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         # Fetch recent sent emails
         sent_endpoint = (
@@ -186,13 +239,13 @@ class GraphClient:
         import datetime
 
         # Use timezone-aware datetime objects (UTC)
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(datetime.timezone.utc)
         start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
         end_time = start_time + datetime.timedelta(days=days)
 
         # Format as ISO 8601 with 'Z' suffix (UTC)
-        start_iso = start_time.isoformat() + "Z"
-        end_iso = end_time.isoformat() + "Z"
+        start_iso = start_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+        end_iso = end_time.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         params = {
             "startDateTime": start_iso,
@@ -332,14 +385,14 @@ class GraphClient:
     def get_recent_events(self, days_back: int = 7) -> List[Dict]:
         """Get calendar events from the last `days_back` days (up to 50)."""
         import datetime
-        now = datetime.datetime.utcnow()
-        start = (now - datetime.timedelta(days=days_back)).isoformat() + "Z"
-        end = now.isoformat() + "Z"
+        now = datetime.datetime.now(datetime.timezone.utc)
+        start = (now - datetime.timedelta(days=days_back)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        end = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         params = {
             "startDateTime": start,
             "endDateTime": end,
-            "$select": "id,subject,start,attendees,createdDateTime,body",
+            "$select": "id,subject,start,end,attendees,createdDateTime,body",
             "$top": 50,
             "$orderby": "createdDateTime desc",
         }
@@ -354,6 +407,7 @@ class GraphClient:
                 "id": event["id"],
                 "subject": event.get("subject", "No Subject"),
                 "start": event.get("start", {}).get("dateTime", ""),
+                "end": event.get("end", {}).get("dateTime", ""),
                 "attendees": attendees,
                 "created": event.get("createdDateTime", ""),
                 "body": event.get("body", {}).get("content", ""),
@@ -366,9 +420,9 @@ class GraphClient:
         Returns events with id, subject, start, end, and attendees.
         """
         import datetime
-        now = datetime.datetime.utcnow()
-        window_start = (now - datetime.timedelta(minutes=minutes)).isoformat() + "Z"
-        end_window = now.isoformat() + "Z"
+        now = datetime.datetime.now(datetime.timezone.utc)
+        window_start = (now - datetime.timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        end_window = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         params = {
             "startDateTime": window_start,
