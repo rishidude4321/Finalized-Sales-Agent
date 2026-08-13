@@ -3,7 +3,7 @@
 {% block content %}
   <h1>📋 Conversation Tree</h1>
   <div class="card">
-    <p>Enter a contact's email address:</p>
+    <p>Search for a contact:</p>
     <form action="/conversation" method="GET">
       <input type="hidden" name="token" value="{{ token }}">
       <input list="contact-list" name="email" placeholder="e.g. bob@acme.com" required>
@@ -14,4 +14,15 @@
       <button type="submit">View Tree</button>
     </form>
   </div>
+
+  {% if contacts %}
+  <div class="card">
+    <h3>Recent contacts</h3>
+    <div>
+      {% for email in contacts %}
+        <a class="chip-contact" href="/conversation?email={{ email | urlencode }}&days=30&token={{ token }}">{{ email }}</a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
 {% endblock %}

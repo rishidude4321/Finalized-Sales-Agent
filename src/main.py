@@ -19,6 +19,8 @@ import json
 from pathlib import Path
 import urllib.parse
 from src.services.control_center import send_control_center_email
+import json
+from pathlib import Path
 
 # constants
 DONE_FILE = "done_followups.json"
@@ -122,13 +124,36 @@ def is_automated_email(mail):
 
     return False
 
+
+def load_extra_keywords():
+    path = Path("extra_keywords.json")
+    if path.exists():
+        try:
+            with open(path, "r") as f:
+                return json.load(f)
+        except:
+            pass
+    return {"follow_up": [], "vague": []}
+
+extra_kw = load_extra_keywords()
+
 # ---------- Deterministic follow‑up detection ----------
 def detect_obvious_follow_ups(emails, conversations):
     items = []
     today = datetime.date.today()
 
     # Incoming emails with explicit questions/requests (skip automated)
-    question_kw = ["?", "when should we meet", "can you", "you can" "could you", "you could", "please let me know", "what are your availabilities"]
+    question_kw = [
+        "?", "when should we meet", "can you", "could you", "would you",
+        "please let me know", "what are your availabilities", "do you have time",
+        "are you available", "let me know", "let us know", "any update", "any updates",
+        "please send", "please share", "please review", "please update",
+        "please confirm", "please advise", "action required", "response needed",
+        "please respond", "awaiting your", "waiting for your",
+        "can we discuss", "can we connect", "let's set up", "set up a call",
+        "schedule a call", "find a time",
+    ]
+    question_kw.extend(extra_kw.get("follow_up", []))
         # Build a lookup: for each conversationId, the latest received date from recent inbox emails
     inbox_latest = {}
     for mail in emails:
@@ -140,6 +165,7 @@ def detect_obvious_follow_ups(emails, conversations):
     for mail in emails:
         if is_automated_email(mail):
             continue
+        print(f"DEBUG followup candidate: {mail.get('from_address')} | {mail.get('subject')} | {mail.get('body','')[:150]}")
         body = mail.get("body", "").lower()
         if any(kw in body for kw in question_kw):
             name = mail.get("from_name") or mail.get("from_address")
@@ -171,7 +197,7 @@ def detect_obvious_follow_ups(emails, conversations):
                     action="Follow up on: " + conv.get("subject", ""),
                     reasoning=f"No reply for {days_ago} days",
                     contact="relevant contact",
-                    thread_id=mail.get("conversationId", "")
+                    thread_id=conv.get("conversationId", "")
                 ))
             except:
                 pass
@@ -179,9 +205,12 @@ def detect_obvious_follow_ups(emails, conversations):
 
 # ---------- Promotion detection (100% deterministic) ----------
 PROMOTION_PHRASES = [
-    "promoted to", "new role", "title change",
-    "starting a new position", "excited to share that i've joined"
+    "promoted to", "new role", "title change", "role change",
+    "starting a new position", "excited to share that i've joined",
+    "i'm now", "i am now", "i've been promoted", "i have been promoted",
+    "i was promoted", "joined as", "new title", "title is now",
 ]
+
 
 def detect_promotions(emails):
     """Find promotion-related updates from recent emails."""
@@ -218,6 +247,7 @@ VAGUE_PHRASES = [
     "next month", "next quarter", "in the new year",
     "when things settle", "when you're free",
 ]
+VAGUE_PHRASES.extend(extra_kw.get("vague", []))
 
 def detect_vague_commitments(emails):
     """Flag emails with vague future plans that Sasha should review manually."""
@@ -430,7 +460,7 @@ def main():
     print("🔄 Fetching data from Microsoft Graph...")
     graph = GraphClient()
     calendar_events = graph.get_calendar_events(days=7)
-    recent_emails = graph.get_recent_emails(days=7, top=50)
+    recent_emails = graph.get_recent_emails(days=7, top=150)
     conversations = graph.get_recent_conversations(days=14)
 
     # HubSpot data
@@ -610,6 +640,30 @@ def main():
     else:
         contacts_text = "<p>• No recently updated contacts.</p>"
 
+    # Determine top priority
+    if today_events:
+        first_event = today_events[0]
+        subject = first_event.get("subject", "No Subject")
+        start_str = first_event.get("start", "")
+        try:
+            start_dt = datetime.datetime.strptime(start_str, "%Y-%m-%dT%H:%M:%S")
+            start_time = start_dt.strftime("%I:%M %p").lstrip("0")
+        except:
+            start_time = start_str
+        meeting_summary = f"Prepare for '{subject}' at {start_time}"
+        if follow_ups:
+            top_priority_text = f"{meeting_summary}. You also have {len(follow_ups)} follow‑up(s) to address."
+        else:
+            top_priority_text = meeting_summary + "."
+    elif follow_ups:
+        first = follow_ups[0]
+        if len(follow_ups) == 1:
+            top_priority_text = f"Respond to {first.contact} – {first.action}."
+        else:
+            top_priority_text = f"Address {len(follow_ups)} follow‑ups, starting with {first.contact}."
+    else:
+        top_priority_text = "No high‑priority items – use this time for strategic work."
+
     briefing = f"""<html><body>
 <h2>Daily Briefing</h2>
 <hr>
@@ -617,7 +671,7 @@ def main():
 <h3>Agenda</h3>
 <p><strong>Today's Meetings ({today_date_str}):</strong><br>
 {today_section_html}<br>
-<strong>Top Priority:</strong> Review the day's meetings and prepare any necessary materials.</p>
+<strong>Top Priority:</strong> {top_priority_text}</p>
 
 <h3>Follow-Ups</h3>
 {follow_ups_text}

@@ -102,5 +102,18 @@
     "meeting_subject": "fake meeting v2",
     "timestamp": "2026-08-12T15:35:28.954173",
     "status": "pending"
+  },
+  "AAMkADI5ZTUxYjQ4LWUzNGItNGFkMi1hMTNmLTRkNWUwODJmOTdmMgBGAAAAAAAwy1kLksUKTZc-5KLqKTuhBwAwvCqrE-m_RaOc7JjQpBf4AAAAAAENAAAwvCqrE-m_RaOc7JjQpBf4AAAUsS0_AAA=-532706697977-340227264190": {
+    "id": "AAMkADI5ZTUxYjQ4LWUzNGItNGFkMi1hMTNmLTRkNWUwODJmOTdmMgBGAAAAAAAwy1kLksUKTZc-5KLqKTuhBwAwvCqrE-m_RaOc7JjQpBf4AAAAAAENAAAwvCqrE-m_RaOc7JjQpBf4AAAUsS0_AAA=-532706697977-340227264190",
+    "deal_id": "340227264190",
+    "deal_name": "Purdue University - New Deal For President",
+    "contact_name": "Bob Johnson",
+    "contact_email": "rvira@purdue.edu",
+    "current_stage": "Decision Maker Bought-In",
+    "next_stage_id": "contractsent",
+    "next_stage_label": "Contract Sent",
+    "meeting_subject": "Education",
+    "timestamp": "2026-08-13T12:55:41.900837",
+    "status": "pending"
   }
 }

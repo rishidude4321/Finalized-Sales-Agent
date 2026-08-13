@@ -242,11 +242,12 @@ class MeetingPrepProcessor:
         else:
             html += "<p>No strong ICP match detected.</p>\n"
 
-        # Suggested invitees
         if invitees:
+            invitees = self._deduplicate_invitees(invitees)
             html += "<h3>🔗 Consider Inviting</h3><ul>\n"
             for inv in invitees:
-                html += f'<li><strong>{inv["name"]}</strong> ({inv["role"]}) – because of "{inv.get("reason", "ICP match")}"</li>\n'
+                reason = inv.get("reason") or "ICP match"
+                html += f'<li><strong>{inv["name"]}</strong> ({inv.get("role", "")}) – because of "{reason}"</li>\n'
             html += "</ul>\n"
 
         # Conversation tree for the first external attendee
@@ -310,3 +311,26 @@ class MeetingPrepProcessor:
             print(f"   Found {len(recent)} recently ended meeting(s).")
         for event in recent:
             draft_gen.create_post_meeting_draft(event)
+
+    def _deduplicate_invitees(self, invitees: List[Dict]) -> List[Dict]:
+        """
+        Merge duplicate invite suggestions by email.
+        If the same person appears multiple times, combine their reasons into one line.
+        """
+        merged = {}
+        for inv in invitees:
+            key = inv.get("email", "").lower()
+            if not key:
+                key = inv.get("name", "").lower()
+            if key in merged:
+                existing = merged[key]
+                if inv.get("reason") and inv["reason"] not in existing["reason"]:
+                    existing["reason"] += "; " + inv["reason"]
+            else:
+                merged[key] = {
+                    "name": inv["name"],
+                    "email": inv.get("email", ""),
+                    "role": inv.get("role", ""),
+                    "reason": inv.get("reason", ""),
+                }
+        return list(merged.values())

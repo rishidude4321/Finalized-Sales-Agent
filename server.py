@@ -110,7 +110,6 @@ def mark_done():
     save_done_followups(data)
     return (
         "<h2>✅ Marked as done. You can close this tab.</h2>"
-        "<script>setTimeout(function(){ window.close(); }, 1500);</script>"
     )
 
 
