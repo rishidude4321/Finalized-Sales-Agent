@@ -30,6 +30,29 @@ DATA_FILE = Path("done_followups.json")
 DEAL_SUGGESTIONS_FILE = Path("deal_suggestions.json")
 CREATED_TASKS_FILE = Path("created_tasks.json")
 AGENT_STATUS_PATH = Path(AGENT_STATUS_FILE)
+HIDDEN_CONTACTS_FILE = Path("hidden_contacts.json")
+HIDDEN_DEALS_FILE = Path("hidden_deals.json")
+
+def load_hidden_contacts():
+    if HIDDEN_CONTACTS_FILE.exists():
+        with open(HIDDEN_CONTACTS_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_hidden_contacts(data):
+    with open(HIDDEN_CONTACTS_FILE, "w") as f:
+        json.dump(data, f, indent=2, default=str)
+
+def load_hidden_deals():
+    if HIDDEN_DEALS_FILE.exists():
+        with open(HIDDEN_DEALS_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_hidden_deals(data):
+    with open(HIDDEN_DEALS_FILE, "w") as f:
+        json.dump(data, f, indent=2, default=str)
+
 
 # ---------- Generic helpers ----------
 def _is_noise_contact_addr(addr: str) -> bool:
@@ -92,6 +115,18 @@ def load_created_tasks():
         with open(CREATED_TASKS_FILE, "r") as f:
             return json.load(f)
     return {}
+
+SNOOZED_DEALS_FILE = Path("snoozed_deals.json")
+
+def load_snoozed_deals():
+    if SNOOZED_DEALS_FILE.exists():
+        with open(SNOOZED_DEALS_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_snoozed_deals(data):
+    with open(SNOOZED_DEALS_FILE, "w") as f:
+        json.dump(data, f, indent=2, default=str)
 
 
 def save_created_tasks(data):
@@ -449,6 +484,51 @@ def submit_request():
         return "<h2>✅ Request sent. Thank you!</h2>"
     return "<h2>❌ Failed to send request. Please try again.</h2>", 500
 
+@app.route("/hide_contact")
+def hide_contact():
+    email = request.args.get("email")
+    lastmod = request.args.get("lastmod")
+    token = request.args.get("token")
+    if token != DONE_SECRET:
+        return "Unauthorized", 401
+    if not email or not lastmod:
+        return "Missing parameters", 400
+
+    data = load_hidden_contacts()
+    data[email] = lastmod
+    save_hidden_contacts(data)
+    return "<h2>✅ Contact hidden until their info changes.</h2>"
+
+@app.route("/hide_deal")
+def hide_deal():
+    deal_id = request.args.get("id")
+    stage = request.args.get("stage")
+    token = request.args.get("token")
+    if token != DONE_SECRET:
+        return "Unauthorized", 401
+    if not deal_id or not stage:
+        return "Missing parameters", 400
+
+    data = load_hidden_deals()
+    data[deal_id] = stage
+    save_hidden_deals(data)
+    return "<h2>✅ Deal hidden until its stage changes.</h2>"
+
+@app.route("/snooze_deal")
+def snooze_deal():
+    deal_id = request.args.get("id")
+    token = request.args.get("token")
+    if token != DONE_SECRET:
+        return "Unauthorized", 401
+    if not deal_id:
+        return "Missing id", 400
+
+    from datetime import datetime, timedelta, timezone
+    snoozed_until = datetime.now(timezone.utc) + timedelta(days=7)
+    data = load_snoozed_deals()
+    data[deal_id] = snoozed_until.timestamp()
+    save_snoozed_deals(data)
+    return "<h2>✅ Deal snoozed for 7 days.</h2>"
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=8500, debug=False)

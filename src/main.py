@@ -5,27 +5,71 @@ Run from project root: python -m src.main
 
 import datetime
 import re
+import json
+import hashlib
+import urllib.parse
 from collections import defaultdict
 from pathlib import Path
-import json
+
 from pydantic import BaseModel
+
 from src.services.graph_client import GraphClient
-import hashlib
-from src.utils.config import DONE_SECRET, USER_EMAIL, CONTROL_CENTER_FLAG, AGENT_STATUS_FILE
-import urllib.parse
 from src.services.hubspot_client import HubSpotClient
 from src.services.draft_generator import DraftGenerator
-import json
-from pathlib import Path
-import urllib.parse
 from src.services.control_center import send_control_center_email
-import json
-from pathlib import Path
+from src.utils.config import (
+    DONE_SECRET,
+    USER_EMAIL,
+    CONTROL_CENTER_FLAG,
+    AGENT_STATUS_FILE,
+)
 
 # constants
 DONE_FILE = "done_followups.json"
 DEAL_SUGGESTIONS_FILE = "deal_suggestions.json"
 CREATED_TASKS_FILE = "created_tasks.json"
+SNOOZED_DEALS_FILE = "snoozed_deals.json"
+HIDDEN_DEALS_FILE = "hidden_deals.json"
+HIDDEN_CONTACTS_FILE = "hidden_contacts.json"
+
+def load_snoozed_deals():
+    path = Path(SNOOZED_DEALS_FILE)
+    if path.exists():
+        try:
+            return json.load(path.read_text())
+        except:
+            pass
+    return {}
+
+def save_snoozed_deals(data):
+    with open(SNOOZED_DEALS_FILE, "w") as f:
+        json.dump(data, f, indent=2, default=str)
+
+def load_hidden_contacts():
+    path = Path(HIDDEN_CONTACTS_FILE)
+    if path.exists():
+        try:
+            return json.load(path.read_text())
+        except:
+            pass
+    return {}
+
+def save_hidden_contacts(data):
+    with open(HIDDEN_CONTACTS_FILE, "w") as f:
+        json.dump(data, f, indent=2, default=str)
+
+def load_hidden_deals():
+    path = Path(HIDDEN_DEALS_FILE)
+    if path.exists():
+        try:
+            return json.load(path.read_text())
+        except:
+            pass
+    return {}
+
+def save_hidden_deals(data):
+    with open(HIDDEN_DEALS_FILE, "w") as f:
+        json.dump(data, f, indent=2, default=str)
 
 # ---------- Local data classes ----------
 class FollowUpItem(BaseModel):
@@ -315,6 +359,11 @@ def generate_followup_hash(contact, action, thread_id=""):
     raw = f"{contact}|{action}|{thread_id}".lower().strip()
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
+def generate_vague_hash(item):
+    """Unique hash for a vague commitment item, used for done/task tracking."""
+    raw = f"vague|{item.sender_email}|{item.subject}|{item.thread_id}".lower().strip()
+    return hashlib.md5(raw.encode()).hexdigest()[:12]
+
 def load_done_items():
     if Path(DONE_FILE).exists():
         with open(DONE_FILE, "r") as f:
@@ -348,6 +397,29 @@ def filter_done_follow_ups(items):
         filtered.append(item)
     return filtered
 
+def filter_done_vague_items(items):
+    """Remove vague commitments that have been marked done, and clean old entries."""
+    done = load_done_items()
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)
+    cleaned = {}
+    for item_id, info in done.items():
+        if info.get("deleted"):
+            deleted_at = datetime.datetime.fromisoformat(info["deleted_at"]).replace(tzinfo=datetime.timezone.utc)
+            if deleted_at < cutoff:
+                continue
+            cleaned[item_id] = info
+        else:
+            cleaned[item_id] = info
+    save_done_items(cleaned)
+
+    filtered = []
+    for item in items:
+        item_id = generate_vague_hash(item)
+        if item_id in cleaned and cleaned[item_id].get("deleted"):
+            continue
+        filtered.append(item)
+    return filtered
+
 # ---------- Deal stage suggestions ----------
 def load_deal_suggestions():
     path = Path(DEAL_SUGGESTIONS_FILE)
@@ -364,7 +436,7 @@ def generate_deal_suggestions(graph_client, hubspot_client):
     """
     Scan meetings from the last 24h, find associated open deals,
     and generate stage‑advancement suggestions.
-    Returns a list of suggestion dicts.
+    Returns a list of unique pending suggestions.
     """
     import datetime
     recent_events = graph_client.get_recent_events(days_back=1)
@@ -410,14 +482,13 @@ def generate_deal_suggestions(graph_client, hubspot_client):
                 if not next_stage_id:
                     continue  # already at final stage
 
-                suggestion_id = f"{event['id']}-{contact_id}-{deal['id']}"
+                suggestion_id = f"{contact_id}-{deal['id']}-{deal['stage_id']}"
                 existing_all = load_deal_suggestions()
                 existing = existing_all.get(suggestion_id)
                 if existing:
                     # If the deal stage has changed since the last suggestion, allow a new one
                     if existing.get("current_stage") == deal["stage_label"]:
-                        continue  # already suggested for this stage, skip
-                    # Stage changed — remove old and allow new suggestion
+                        continue  # already suggested for this stage
                     del existing_all[suggestion_id]
                     save_deal_suggestions(existing_all)
 
@@ -435,6 +506,15 @@ def generate_deal_suggestions(graph_client, hubspot_client):
                     "status": "pending",
                 }
                 suggestions.append(suggestion)
+
+    # Deduplicate by suggestion id in case the same deal/contact/stage appeared in multiple meetings
+    seen_ids = set()
+    unique_suggestions = []
+    for s in suggestions:
+        if s["id"] not in seen_ids:
+            seen_ids.add(s["id"])
+            unique_suggestions.append(s)
+    suggestions = unique_suggestions
 
     if suggestions:
         current = load_deal_suggestions()
@@ -467,7 +547,27 @@ def main():
     print("🔄 Fetching data from HubSpot...")
     hubspot = HubSpotClient()
     outstanding_deals = hubspot.get_outstanding_deals()
+    # Hide deals the user dismissed until their stage changes
+        # Hide deals the user dismissed until their stage changes
+    hidden_deals = load_hidden_deals()
+    snoozed_deals = load_snoozed_deals()
+    now_ts = datetime.datetime.now(datetime.timezone.utc).timestamp()
+
+    outstanding_deals = [
+        d for d in outstanding_deals
+        if not (
+            (d.get("id") in hidden_deals and hidden_deals[d["id"]] == d.get("stage"))
+            or (d.get("id") in snoozed_deals and snoozed_deals[d["id"]] > now_ts)
+        )
+    ]
     recent_contacts = hubspot.get_recent_contacts(days=7)
+    # Hide contacts the user dismissed until their data changes
+    hidden_contacts = load_hidden_contacts()
+    recent_contacts = [
+        c for c in recent_contacts
+        if not (c.get("email") in hidden_contacts
+                and hidden_contacts[c["email"]] == c.get("last_modified"))
+    ]
     
     # Build combined conversations (recent emails as virtual threads)
     combined_conversations = list(conversations)
@@ -508,6 +608,9 @@ def main():
     if vague_thread_ids:
         follow_ups = [f for f in follow_ups if f.thread_id not in vague_thread_ids]
 
+    # Hide vague items that Sasha has already marked done
+    vague_items = filter_done_vague_items(vague_items)
+
     # (LLM extraction commented out – no longer needed)
     # chain = build_insights_chain()
     # insights = chain.invoke({...})
@@ -545,8 +648,8 @@ def main():
             deny = f"http://localhost:8500/deny_deal?id={s['id']}&token={DONE_SECRET}"
             deal_lines.append(
                 f'<li>{s["contact_name"]} ({s["contact_email"]}) – Deal: {s["deal_name"]} '
-                f'({s["current_stage"]} → {s["next_stage_label"]}) '
-                f'<a href="{approve}">[Approve]</a> <a href="{deny}">[Deny]</a></li>'
+                f'({s["current_stage"]} → {s["next_stage_label"]})<br>'
+                f'<a href="{approve}">[Approve]</a> · <a href="{deny}">[Deny]</a></li>'
             )
         deal_sugg_text = "<ul>" + "".join(deal_lines) + "</ul>"
     else:
@@ -617,30 +720,48 @@ def main():
 
     undo_link = f'http://localhost:8500/recent?token={DONE_SECRET}'
 
-        # HubSpot deals text
     if outstanding_deals:
         deal_lines = []
         for deal in outstanding_deals:
             stage_name = hubspot.get_deal_stage_name(deal["stage"])
             last_mod = deal["last_modified"][:10] if deal["last_modified"] else "unknown"
             amount = f" (${deal['amount']})" if deal["amount"] else ""
-            deal_lines.append(f'<li>{deal["name"]}{amount} – Stage: {stage_name} – Last activity: {last_mod}</li>')
+            deal_id = str(deal["id"])
+            stage = str(deal["stage"])
+            snooze_deal_link = (
+                f"http://localhost:8500/snooze_deal?id={urllib.parse.quote(deal_id)}&token={DONE_SECRET}"
+            )
+            hide_deal_link = (
+                f"http://localhost:8500/hide_deal?id={urllib.parse.quote(deal_id)}"
+                f"&stage={urllib.parse.quote(stage)}&token={DONE_SECRET}"
+            )
+            deal_lines.append(
+                f'<li>{deal["name"]}{amount} – Stage: {stage_name} – Last activity: {last_mod}<br>'
+                f'<a href="{snooze_deal_link}">[Snooze 7d]</a> · '
+                f'<a href="{hide_deal_link}">[Hide]</a></li>'
+            )
         deals_text = "<ul>" + "".join(deal_lines) + "</ul>"
     else:
         deals_text = "<p>• No outstanding deals needing attention.</p>"
 
-    # HubSpot contacts text
+        # HubSpot contacts text
     if recent_contacts:
         contact_lines = []
         for contact in recent_contacts:
             title = f" – {contact['jobtitle']}" if contact.get("jobtitle") else ""
             company = f" at {contact['company']}" if contact.get("company") else ""
-            contact_lines.append(f'<li>{contact["name"]}{title}{company} ({contact["email"]}) – Updated: {contact["last_modified"][:10]}</li>')
+            hide_contact_link = (
+                f"http://localhost:8500/hide_contact?email={urllib.parse.quote(contact['email'])}"
+                f"&lastmod={urllib.parse.quote(contact['last_modified'])}&token={DONE_SECRET}"
+            )
+            contact_lines.append(
+                f'<li>{contact["name"]}{title}{company} ({contact["email"]}) '
+                f'– Updated: {contact["last_modified"][:10]}<br>'
+                f'<a href="{hide_contact_link}">[Hide]</a></li>'
+            )
         contacts_text = "<ul>" + "".join(contact_lines) + "</ul>"
     else:
         contacts_text = "<p>• No recently updated contacts.</p>"
-
-    # Determine top priority
     if today_events:
         first_event = today_events[0]
         subject = first_event.get("subject", "No Subject")
@@ -652,52 +773,166 @@ def main():
             start_time = start_str
         meeting_summary = f"Prepare for '{subject}' at {start_time}"
         if follow_ups:
-            top_priority_text = f"{meeting_summary}. You also have {len(follow_ups)} follow‑up(s) to address."
+            top_priority_text = f"{meeting_summary}. You also have {len(follow_ups)} follow‑up(s)."
         else:
             top_priority_text = meeting_summary + "."
     elif follow_ups:
-        first = follow_ups[0]
         if len(follow_ups) == 1:
-            top_priority_text = f"Respond to {first.contact} – {first.action}."
+            f = follow_ups[0]
+            top_priority_text = f"Respond to {f.contact} about {f.action}."
         else:
-            top_priority_text = f"Address {len(follow_ups)} follow‑ups, starting with {first.contact}."
+            top_priority_text = f"Address {len(follow_ups)} follow‑ups."
     else:
         top_priority_text = "No high‑priority items – use this time for strategic work."
 
-    briefing = f"""<html><body>
-<h2>Daily Briefing</h2>
-<hr>
+    # Rebuild follow-ups in a warm, readable format
+    follow_up_lines = []
+    for idx, f in enumerate(follow_ups, 1):
+        contact = f.contact
 
-<h3>Agenda</h3>
-<p><strong>Today's Meetings ({today_date_str}):</strong><br>
-{today_section_html}<br>
-<strong>Top Priority:</strong> {top_priority_text}</p>
+        # Clean up action text for display
+        action_clean = f.action
+        for prefix in ["Reply to ", "Follow up on: "]:
+            if action_clean.startswith(prefix):
+                action_clean = action_clean[len(prefix):]
+                break
 
-<h3>Follow-Ups</h3>
+        # Strip common prefixes like Re:, FW:, Fwd:
+        while True:
+            lower = action_clean.lower()
+            if lower.startswith("re:"):
+                action_clean = action_clean[3:].strip()
+            elif lower.startswith("fw:") or lower.startswith("fwd:"):
+                action_clean = action_clean[3:].strip()
+            else:
+                break
+
+        subject_display = action_clean.strip() or f.action
+
+        item_id = generate_followup_hash(f.contact, f.action, f.thread_id)
+        done_link = (
+            f"http://localhost:8500/done?id={item_id}&token={DONE_SECRET}"
+            f"&action={urllib.parse.quote(f.action)}"
+            f"&reasoning={urllib.parse.quote(f.reasoning)}"
+            f"&contact={urllib.parse.quote(f.contact)}"
+        )
+
+        if item_id in created_tasks:
+            task_html = "[Task ✓]"
+        else:
+            due_days = 1 if "Recent email asks" in f.reasoning else 3
+            task_link = (
+                f"http://localhost:8500/create_task?hash={item_id}"
+                f"&email={urllib.parse.quote(f.contact)}"
+                f"&title={urllib.parse.quote(f.action)}"
+                f"&duedays={due_days}&token={DONE_SECRET}"
+            )
+            task_html = f'<a href="{task_link}">[Create Task]</a>'
+
+        follow_up_lines.append(
+            f'<p style="margin-bottom:14px;"><strong>{idx}. {subject_display}</strong><br>'
+            f'<span style="color:#555;">{contact}</span><br>'
+            f'<a href="{done_link}">[Mark Done]</a> · {task_html}</p>'
+        )
+
+    if follow_up_lines:
+        follow_ups_text = "".join(follow_up_lines)
+    else:
+        follow_ups_text = "<p>No outstanding follow‑ups identified.</p>"
+
+    # Format vague commitments like follow-ups, with Mark Done / Create Task actions
+    if vague_items:
+        vague_review_lines = []
+        for idx, v in enumerate(vague_items, 1):
+            sender = v.sender_name or v.sender_email
+            vague_item_id = generate_vague_hash(v)
+
+            # Mark Done link
+            done_link = (
+                f"http://localhost:8500/done?id={vague_item_id}&token={DONE_SECRET}"
+                f"&action={urllib.parse.quote('Review: ' + v.subject)}"
+                f"&reasoning={urllib.parse.quote('Vague commitment')}"
+                f"&contact={urllib.parse.quote(v.sender_email)}"
+            )
+
+            # Create Task link if not already created
+            if vague_item_id in created_tasks:
+                task_html = "[Task ✓]"
+            else:
+                task_link = (
+                    f"http://localhost:8500/create_task?hash={vague_item_id}"
+                    f"&email={urllib.parse.quote(v.sender_email)}"
+                    f"&title={urllib.parse.quote('Review: ' + v.subject)}"
+                    f"&duedays=3&token={DONE_SECRET}"
+                )
+                task_html = f'<a href="{task_link}">[Create Task]</a>'
+
+            vague_review_lines.append(
+                f'<p style="margin-bottom:14px;"><strong>{idx}. {v.subject}</strong><br>'
+                f'<span style="color:#555;">{sender} ({v.sender_email})</span><br>'
+                f'<span style="color:#555;">{v.preview}</span><br>'
+                f'<a href="{done_link}">[Mark Done]</a> · {task_html}</p>'
+            )
+        vague_review_text = "".join(vague_review_lines)
+    else:
+        vague_review_text = "<p>No vague commitments needing review.</p>"
+
+    # Consistent bullet for empty deal stage suggestions
+    if deal_sugg_text.strip():
+        deal_sugg_display = deal_sugg_text
+    else:
+        deal_sugg_display = '<p style="margin-left:20px;">• No deal stage suggestions.</p>'
+
+    # Today section combines meetings and focus
+    today_meetings_block = ""
+    if today_events:
+        today_meetings_block = f'<p style="margin-bottom:4px;"><strong>Meetings</strong><br>{today_section_html}</p>'
+
+    updates_block = ""
+    if "No passive updates" not in updates_text:
+        updates_block = f'<h3 style="margin:14px 0 6px; color:#000;">Updates</h3>{updates_text}'
+
+    contacts_block = ""
+    if "No recently updated contacts" not in contacts_text:
+        contacts_block = f'<h4 style="margin:14px 0 6px; color:#000;">Recently updated contacts</h4>{contacts_text}'
+
+    # Assemble the warm briefing
+    briefing = f"""<html><body style="font-family: Calibri, 'Segoe UI', Arial, sans-serif; color:#000; max-width:760px;">
+<p><strong>Good morning Sasha,</strong></p>
+<p>Here’s your briefing for {today_date_str}.</p>
+<hr style="border:none; border-top:1px solid #e6e6e6; margin:18px 0;">
+
+<h3 style="margin:14px 0 6px; color:#000;">Today</h3>
+{today_meetings_block}
+\n
+<p style="margin:0 0 14px; font-size:15px;"><strong>Focus:</strong> {top_priority_text}</p>
+
+<hr style="border:none; border-top:1px solid #e6e6e6; margin:18px 0;">
+
+<h3 style="margin:14px 0 6px; color:#000;">Follow‑ups</h3>
 {follow_ups_text}
 
-<h3>Upcoming Meetings This Week</h3>
-<p>{upcoming_section_html}</p>
+<hr style="border:none; border-top:1px solid #e6e6e6; margin:18px 0;">
 
-<h3>Updates</h3>
-{updates_text}
+<h3 style="margin:14px 0 6px; color:#000;">Upcoming</h3>
+<p style="margin:0 0 14px;">{upcoming_section_html}</p>
 
-<hr>
-<h3>DEALS NEEDING ATTENTION</h3>
+<hr style="border:none; border-top:1px solid #e6e6e6; margin:18px 0;">
+
+<h3 style="margin:14px 0 6px; color:#000;">Needs Your Review</h3>
+{vague_review_text}
+
+{updates_block}
+
+<hr style="border:none; border-top:1px solid #e6e6e6; margin:18px 0;">
+
+<h3 style="margin:14px 0 6px; color:#000;">HubSpot</h3>
 {deals_text}
+{deal_sugg_display}
+{contacts_block}
 
-<h3>RECENTLY UPDATED CONTACTS</h3>
-{contacts_text}
-<hr>
-
-<h3>Needs Your Review (Vague commitments)</h3>
-{vague_text}
-
-<h3>DEAL STAGE SUGGESTIONS</h3>
-{deal_sugg_text}
-
-<hr>
-<p><em>Accidentally marked something done? <a href="{undo_link}">View recent changes.</a></em></p>
+<hr style="border:none; border-top:1px solid #e6e6e6; margin:18px 0;">
+<p style="color:#888; font-size:13px; font-style:italic;">Accidentally marked something done? <a href="{undo_link}">View recent changes.</a></p>
 </body></html>"""
 
     print("\n" + "=" * 60)
@@ -707,7 +942,6 @@ def main():
 
     # Create Outlook draft as HTML
     graph.create_draft(to=USER_EMAIL, subject="Daily Briefing", body=briefing, content_type="HTML")
-        # Send control centre email once
     import os
     from pathlib import Path
     flag = Path(CONTROL_CENTER_FLAG)
