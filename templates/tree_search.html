@@ -2,14 +2,12 @@
 {% block title %}Conversation Tree{% endblock %}
 {% block content %}
   <h1>📋 Conversation Tree</h1>
+
   <div class="card">
-    <p>Search for a contact:</p>
+    <p>Enter a contact's email address:</p>
     <form action="/conversation" method="GET">
       <input type="hidden" name="token" value="{{ token }}">
-      <input list="contact-list" name="email" placeholder="e.g. bob@acme.com" required>
-      <datalist id="contact-list">
-        {% for email in contacts %}<option value="{{ email }}">{% endfor %}
-      </datalist>
+      <input type="email" name="email" placeholder="e.g. bob@acme.com" required>
       <br><br>
       <button type="submit">View Tree</button>
     </form>
@@ -19,8 +17,11 @@
   <div class="card">
     <h3>Recent contacts</h3>
     <div>
-      {% for email in contacts %}
-        <a class="chip-contact" href="/conversation?email={{ email | urlencode }}&days=30&token={{ token }}">{{ email }}</a>
+      {% for c in contacts %}
+        <a class="chip-contact"
+           href="/conversation?email={{ c.email | urlencode }}&days=30&token={{ token }}">
+          {{ c.display }}
+        </a>
       {% endfor %}
     </div>
   </div>

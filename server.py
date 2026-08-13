@@ -32,6 +32,33 @@ CREATED_TASKS_FILE = Path("created_tasks.json")
 AGENT_STATUS_PATH = Path(AGENT_STATUS_FILE)
 
 # ---------- Generic helpers ----------
+def _is_noise_contact_addr(addr: str) -> bool:
+    """
+    Return True for system, noreply, daemon, and internal/automated addresses
+    that should never appear as conversation contacts.
+    """
+    lower = addr.lower().strip()
+    if not lower or "@" not in lower:
+        return True
+
+    # Internal / Sasha's own domains
+    if lower.endswith("@reachpathways.com"):
+        return True
+    if lower.endswith("@chicagoscholars.org"):
+        return True
+
+    # Common automated/system senders
+    noise_markers = [
+        "no-reply@", "noreply@", "mailer-daemon@", "microsoftsecurity-noreply@",
+        "mssecurity-noreply@", "drive-shares", "firebase-noreply@", "microsoft.exchange",
+        "teams.mail.microsoft", "postmaster@", "digest-noreply@",
+    ]
+    for marker in noise_markers:
+        if marker in lower:
+            return True
+
+    return False
+
 def _now_iso():
     return datetime.now(timezone.utc).isoformat()
 
@@ -278,16 +305,36 @@ def tree_search_page():
 
     graph = GraphClient()
     recent_emails = graph.get_recent_emails(days=30, top=200)
+
     contacts = []
     seen = set()
     for mail in recent_emails:
         addr = mail.get("from_address", "")
-        if addr and "@" in addr and not addr.endswith("@reachpathways.com") and addr not in seen:
-            seen.add(addr)
-            contacts.append(addr)
+        if _is_noise_contact_addr(addr):
+            continue
+        if addr in seen:
+            continue
+        seen.add(addr)
+
+        name = mail.get("from_name", "").strip()
+        if not name or name.lower() == addr.lower():
+            display = addr
+        else:
+            display = f"{name} ({addr})"
+
+        contacts.append({
+            "email": addr,
+            "name": name,
+            "display": display,
+        })
+
+        if len(contacts) >= 30:
+            break
+
+    # Sort alphabetically by display name / email
+    contacts.sort(key=lambda x: x["email"].lower())
 
     return render_template("tree_search.html", token=token, contacts=contacts)
-
 
 @app.route("/health")
 def health_page():
