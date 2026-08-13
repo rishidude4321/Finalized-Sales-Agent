@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Conversation Tree{% endblock %}
+{% block content %}
+  <h1>📋 Conversation Tree</h1>
+  <div class="card">
+    <p>Enter a contact's email address:</p>
+    <form action="/conversation" method="GET">
+      <input type="hidden" name="token" value="{{ token }}">
+      <input list="contact-list" name="email" placeholder="e.g. bob@acme.com" required>
+      <datalist id="contact-list">
+        {% for email in contacts %}<option value="{{ email }}">{% endfor %}
+      </datalist>
+      <br><br>
+      <button type="submit">View Tree</button>
+    </form>
+  </div>
+{% endblock %}

@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Agent Health{% endblock %}
+{% block content %}
+  <h1>🩺 Agent Health</h1>
+  <div class="card">
+    <ul>
+      {% for item in status_cards %}
+        <li>
+          <span class="status-badge {{ item.css }}">{{ item.status }}</span>
+          <strong>{{ item.label }}</strong> — {{ item.detail }}
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+{% endblock %}

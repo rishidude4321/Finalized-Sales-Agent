@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Sales Support Agent – Control Centre{% endblock %}
+{% block content %}
+  <h1>🛰️ Sales Support Agent</h1>
+  <div class="card">
+    <h2>Quick Actions</h2>
+    <ul>
+      <li><a href="/tree?token={{ token }}">📋 Open Conversation Tree</a></li>
+      <li><a href="/report?token={{ token }}">⚠️ Report an Issue</a></li>
+      <li><a href="/request?token={{ token }}">💡 Request Automation</a></li>
+      <li><a href="/health?token={{ token }}">🩺 Health Check</a></li>
+    </ul>
+  </div>
+{% endblock %}

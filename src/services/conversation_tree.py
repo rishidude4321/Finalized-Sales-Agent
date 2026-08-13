@@ -178,9 +178,9 @@ class ConversationTreeBuilder:
         html_parts.append('</div>')
         return "\n".join(html_parts)
 
-    def build_tree_html(self, email: str, days: int = 30) -> str:
+    def build_tree_content(self, email: str, days: int = 30) -> str:
         """
-        Build the full HTML conversation tree for a contact.
+        Build the conversation tree inner HTML fragment for the contact.
         Includes time-range selector, email threads, meetings, and HubSpot activity.
         """
         email_lower = email.lower().strip()
@@ -198,22 +198,8 @@ class ConversationTreeBuilder:
         # Group emails
         threads = self._group_emails_into_threads(emails)
 
-        # Build HTML
-        html = [f'<html><body style="font-family: Segoe UI, Arial, sans-serif;">']
-        html.append(f'<h2>📋 Conversation History: {email_lower}</h2>')
-
-        # Time range selector
-        base_url = "/conversation"
-        ranges = [("7 days", 7), ("30 days", 30), ("3 months", 90), ("1 year", 365), ("All time", 3650)]
-        html.append('<p><strong>Time range:</strong> ')
-        links = []
-        for label, d in ranges:
-            if d == days:
-                links.append(f'<strong>{label}</strong>')
-            else:
-                links.append(f'<a href="{base_url}?email={email_lower}&days={d}&token={DONE_SECRET}">{label}</a>')
-        html.append(' | '.join(links))
-        html.append('</p>')
+        # Build inner HTML
+        html = []
 
         # Email threads
         html.append('<h3>📁 Email Threads</h3>')
@@ -223,6 +209,8 @@ class ConversationTreeBuilder:
         else:
             html.append('<p>No email history found in this range.</p>')
 
+        html.append('<hr>')
+
         # Meetings
         html.append('<h3>📅 Meetings</h3>')
         if meetings:
@@ -231,14 +219,14 @@ class ConversationTreeBuilder:
         else:
             html.append('<p>No meetings found.</p>')
 
+        html.append('<hr>')
+
         # HubSpot activity
         html.append(self._format_hubspot_html(engagements))
 
-        html.append('</body></html>')
-
-        full_html = "\n".join(html)
+        inner_html = "\n".join(html)
 
         # Save cache
-        self.cache[cache_key] = {"ts": time.time(), "html": full_html}
+        self.cache[cache_key] = {"ts": time.time(), "html": inner_html}
         self._save_cache()
-        return full_html
+        return inner_html

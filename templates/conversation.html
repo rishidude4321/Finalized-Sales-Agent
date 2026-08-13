@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Conversation Tree{% endblock %}
+{% block content %}
+  <h1>📋 Conversation History: {{ email }}</h1>
+  <div class="card time-range">
+    <p><strong>Time range:</strong>
+      {% set ranges = [("7 days", 7), ("30 days", 30), ("3 months", 90), ("1 year", 365), ("All time", 3650)] %}
+      {% for label, d in ranges %}
+        {% if d == days %}
+          <a><strong>{{ label }}</strong></a>
+        {% else %}
+          <a href="/conversation?email={{ email | urlencode }}&days={{ d }}&token={{ token }}">{{ label }}</a>
+        {% endif %}
+      {% endfor %}
+    </p>
+  </div>
+
+  <div class="card">
+    {{ tree_html|safe }}
+  </div>
+{% endblock %}

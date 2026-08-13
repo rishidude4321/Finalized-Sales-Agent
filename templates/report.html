@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Report an Issue{% endblock %}
+{% block content %}
+  <h1>⚠️ Report an Issue</h1>
+  <div class="card">
+    <form action="/submit_report" method="POST">
+      <input type="hidden" name="token" value="{{ token }}">
+      <label for="message">What went wrong?</label>
+      <textarea name="message" id="message" required></textarea>
+      <br><br>
+      <button type="submit">Submit to Rishi</button>
+    </form>
+  </div>
+{% endblock %}
