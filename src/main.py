@@ -214,7 +214,6 @@ def detect_obvious_follow_ups(emails, conversations):
     for mail in emails:
         if is_automated_email(mail):
             continue
-        print(f"DEBUG followup candidate: {mail.get('from_address')} | {mail.get('subject')} | {mail.get('body','')[:150]}")
         body = mail.get("body", "").lower()
         if any(kw in body for kw in question_kw):
             name = mail.get("from_name") or mail.get("from_address")
@@ -589,18 +588,13 @@ def main():
     # 1. Deterministic follow‑ups
     follow_ups = detect_obvious_follow_ups(recent_emails, combined_conversations)
         # DEBUG
-    print(f"DEBUG: recent_emails count = {len(recent_emails)}")
     for i, mail in enumerate(recent_emails):
         print(f"  {i}: {mail.get('subject','?')} from {mail.get('from_address','?')}")
-    print(f"DEBUG: raw follow_ups count = {len(follow_ups)}")
     for f in follow_ups:
         print(f"  - {f.action} ({f.contact})")
     follow_ups = deduplicate_follow_ups(follow_ups)
-    print(f"DEBUG after dedup: {len(follow_ups)}")
     follow_ups = validate_follow_ups(follow_ups, recent_emails, combined_conversations)
-    print(f"DEBUG after validate: {len(follow_ups)}")
     follow_ups = filter_done_follow_ups(follow_ups)
-    print(f"DEBUG after filter_done: {len(follow_ups)}")
 
     # 2. Promotion updates
     updates = detect_promotions(recent_emails)

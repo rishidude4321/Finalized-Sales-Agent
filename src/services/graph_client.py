@@ -482,7 +482,7 @@ class GraphClient:
                     if end_dt >= now_utc:
                         continue
                 except Exception as e:
-                    print(f"DEBUG: Time parse error for '{end_str}': {e}")
+                    print(f"Time parse error for '{end_str}': {e}")
             attendees = [a.get("emailAddress", {}).get("address", "") for a in event.get("attendees", [])]
             events.append({
                 "id": event["id"],

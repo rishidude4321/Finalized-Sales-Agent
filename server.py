@@ -331,8 +331,6 @@ def create_contact():
         jobtitle=jobtitle,
     )
 
-    print("DEBUG contact_id returned:", contact_id)
-
     if not contact_id:
         return render_template(
             "action_success.html",
@@ -798,9 +796,6 @@ def generate_outreach_route():
         leads, error = [], "AI did not generate an X-Ray query."
 
     # Keep the raw query/error for the developer in the terminal log
-    print(f"DEBUG OUTREACH QUERY: {full_query}")
-    if error:
-        print(f"DEBUG OUTREACH ERROR: {error}")
 
     # Store in cache for pagination
     cache_id = str(uuid.uuid4())
@@ -842,7 +837,6 @@ def more_leads():
     new_leads, error = fetch_live_leads(cache["query"], start_offset=cache["offset"])
 
     if error:
-        print(f"DEBUG OUTREACH ERROR (more): {error}")
         message = "No additional leads found or an error occurred. Please try again later."
         new_leads = []
     else:
