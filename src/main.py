@@ -10,7 +10,9 @@ import hashlib
 import urllib.parse
 from collections import defaultdict
 from pathlib import Path
-
+from src.utils.logger import get_logger
+from src.utils.agent_state import load_agent_status, save_agent_status
+from src.services.status_reporter import send_status_email
 from pydantic import BaseModel
 
 from src.services.graph_client import GraphClient
@@ -31,6 +33,8 @@ CREATED_TASKS_FILE = "created_tasks.json"
 SNOOZED_DEALS_FILE = "snoozed_deals.json"
 HIDDEN_DEALS_FILE = "hidden_deals.json"
 HIDDEN_CONTACTS_FILE = "hidden_contacts.json"
+from src.utils.logger import get_logger
+logger = get_logger("main")
 
 def load_snoozed_deals():
     path = Path(SNOOZED_DEALS_FILE)
@@ -77,6 +81,7 @@ class FollowUpItem(BaseModel):
     reasoning: str
     contact: str
     thread_id: str = ""
+    sender_name: str = ""
 
 class UpdateItem(BaseModel):
     name: str
@@ -217,7 +222,8 @@ def detect_obvious_follow_ups(emails, conversations):
                 action=f"Reply to {name} re: {mail['subject']}",
                 reasoning=f"Recent email asks: {mail['subject']}",
                 contact=mail["from_address"],
-                thread_id=mail.get("conversationId", "")
+                thread_id=mail.get("conversationId", ""),
+                sender_name=mail.get("from_name", ""),
             ))
 
     # Sent messages >= 3 days with no reply
@@ -538,6 +544,7 @@ def save_created_tasks(data):
 # ---------- Main ----------
 def main():
     print("🔄 Fetching data from Microsoft Graph...")
+    logger.info("Daily briefing started.")
     graph = GraphClient()
     calendar_events = graph.get_calendar_events(days=7)
     recent_emails = graph.get_recent_emails(days=7, top=150)
@@ -617,8 +624,10 @@ def main():
 
     # 3.5 Generate follow‑up drafts
     draft_gen = DraftGenerator()
+    drafts_created_this_run = 0
     for follow_up in follow_ups:
-        draft_gen.create_follow_up_draft(follow_up)
+        if draft_gen.create_follow_up_draft(follow_up):
+            drafts_created_this_run += 1
 
     # Calendar sections
     today_events, upcoming_events = split_calendar_by_today(calendar_events)
@@ -691,6 +700,7 @@ def main():
             task_link = (
                 f"http://localhost:8500/create_task?hash={item_id}&email={urllib.parse.quote(f.contact)}"
                 f"&title={urllib.parse.quote(f.action)}&duedays={due_days}&token={DONE_SECRET}"
+                f"&name={urllib.parse.quote(f.sender_name or '')}"
             )
             task_html = f'<a href="{task_link}">[Create Task]</a>'
 
@@ -864,6 +874,7 @@ def main():
                     f"&email={urllib.parse.quote(v.sender_email)}"
                     f"&title={urllib.parse.quote('Review: ' + v.subject)}"
                     f"&duedays=3&token={DONE_SECRET}"
+                    f"&name={urllib.parse.quote(v.sender_name or '')}"
                 )
                 task_html = f'<a href="{task_link}">[Create Task]</a>'
 
@@ -973,26 +984,29 @@ def main():
         # The watcher should handle this, but we can also run it now
         pass  # We'll rely on the watcher for real‑time, but can add a manual run here later
 
-    def load_agent_status():
-        path = Path(AGENT_STATUS_FILE)
-        if path.exists():
-            with open(path, "r") as f:
-                return json.load(f)
-        return {}
-
-    def save_agent_status(data):
-        with open(AGENT_STATUS_FILE, "w") as f:
-            json.dump(data, f, indent=2, default=str)
-
     # Update agent status
     status = load_agent_status()
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = datetime.datetime.now()
+    now_str = now.strftime("%Y-%m-%d %H:%M")
+    today_str = now.strftime("%Y-%m-%d")
+
+    # Reset daily counters if date changed
+    if status.get("status_date") != today_str:
+        status["status_date"] = today_str
+        status["drafts_today"] = 0
+        status["followups_today"] = 0
+
     status["last_briefing_time"] = now_str
     status["followups_today"] = len(follow_ups)
-    # Increment draft count if we created any today
-    status["drafts_today"] = status.get("drafts_today", 0) + 1  # daily briefing draft
-    # You can add more tracking later
+    status["drafts_today"] = status.get("drafts_today", 0) + drafts_created_this_run
     save_agent_status(status)
+
+    logger.info("Daily briefing completed. Drafts created: %d", drafts_created_this_run)
+
+    # Send weekly status email to Rishi on Mondays only
+    if datetime.date.today().weekday() == 0:
+        logger.info("Monday detected – sending weekly status email.")
+        send_status_email()
 
 if __name__ == "__main__":
     main()

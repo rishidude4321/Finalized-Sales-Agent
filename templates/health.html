@@ -2,14 +2,30 @@
 {% block title %}Agent Health{% endblock %}
 {% block content %}
   <h1>🩺 Agent Health</h1>
+
   <div class="card">
     <ul>
       {% for item in status_cards %}
-        <li>
+        <li style="margin-bottom: 10px;">
           <span class="status-badge {{ item.css }}">{{ item.status }}</span>
           <strong>{{ item.label }}</strong> — {{ item.detail }}
         </li>
       {% endfor %}
     </ul>
+  </div>
+
+  <div class="card">
+    <h3>Recent log entries</h3>
+    {% if last_logs %}
+      <pre style="background:#f8f8f8; padding:12px; border-radius:8px; white-space: pre-wrap;">{{ last_logs | join('\n') }}</pre>
+    {% else %}
+      <p>No log entries yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <p>
+      <a class="btn" href="/send_status?token={{ token }}">📧 Send Status to Rishi</a>
+    </p>
   </div>
 {% endblock %}

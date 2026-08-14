@@ -15,8 +15,13 @@ from src.services.company_enricher import CompanyEnricher
 import urllib.parse
 from src.services.conversation_tree import ConversationTreeBuilder
 from src.utils.config import DONE_SECRET
+from src.utils.agent_state import load_agent_status, save_agent_status
+import datetime
+from src.utils.logger import get_logger
+import urllib.parse
+from src.utils.config import DONE_SECRET
 
-
+logger = get_logger("meeting_prep")
 PROCESSED_EVENTS_FILE = "processed_events.json"
 INVITE_SUGGESTIONS_FILE = "invite_suggestions.json"
 PREP_MARKER = "<!-- sales-agent-meeting-prep -->"
@@ -215,7 +220,23 @@ class MeetingPrepProcessor:
                 company_display = contact.get("company") or "Unknown"
                 html += f'<li><strong>{contact["name"]}</strong> – {contact.get("jobtitle","")} at {company_display} ({email})</li>\n'
             else:
-                html += f'<li>{email} (not in HubSpot)</li>\n'
+                name_hint = email.split("@")[0].replace(".", " ").title()
+
+                # Try to prefill company if we already enriched it
+                company_hint = ""
+                if company_info:
+                    hs_company = company_info.get("hubspot_company", {})
+                    enriched_company = company_info.get("enriched", {})
+                    company_hint = hs_company.get("name") or enriched_company.get("name") or ""
+
+                add_contact_link = (
+                    "http://localhost:8500/new_contact"
+                    f"?email={urllib.parse.quote(email)}"
+                    f"&name={urllib.parse.quote(name_hint)}"
+                    f"&company={urllib.parse.quote(company_hint)}"
+                    f"&token={DONE_SECRET}"
+                )
+                html += f'<li>{email} (not in HubSpot) — <a href="{add_contact_link}" target="_blank">Add to HubSpot</a></li>\n'
         html += "</ul>\n"
 
         # Company background
@@ -297,6 +318,12 @@ class MeetingPrepProcessor:
             else:
                 print(f"   ❌ Failed to update event.")
         self._save_processed_ids()
+        # Update status
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        status = load_agent_status()
+        status["last_meeting_prep_time"] = now_str
+        save_agent_status(status)
+        logger.info("Meeting prep completed for %d event(s).", processed_count)
         return processed_count
     
     def process_post_meetings(self):
@@ -311,6 +338,11 @@ class MeetingPrepProcessor:
             print(f"   Found {len(recent)} recently ended meeting(s).")
         for event in recent:
             draft_gen.create_post_meeting_draft(event)
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        status = load_agent_status()
+        status["last_meeting_prep_time"] = now_str
+        save_agent_status(status)
+        logger.info("Post-meeting draft processing completed.")
 
     def _deduplicate_invitees(self, invitees: List[Dict]) -> List[Dict]:
         """

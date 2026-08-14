@@ -215,3 +215,8 @@ hr {
   color: #ffffff;
   text-decoration: none;
 }
+
+input::placeholder,
+textarea::placeholder {
+  color: #999999;
+}

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Recent Changes{% endblock %}
+{% block content %}
+  <h1>🕘 Recent Changes</h1>
+  <div class="card">
+    {% if items %}
+      <p>Recently marked done. Click undo if you made a mistake.</p>
+      <ul>
+        {% for item in items %}
+          <li style="margin-bottom:12px;">
+            <strong>{{ item.display }}</strong><br>
+            <span style="color:#888;">Deleted {{ item.deleted_date }}</span><br>
+            <a href="/undo?id={{ item.id }}&token={{ token }}">[Undo]</a>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p>No recently marked‑done items.</p>
+    {% endif %}
+  </div>
+{% endblock %}

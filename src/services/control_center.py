@@ -11,19 +11,19 @@ def send_control_center_email():
     """Send the control centre email once. Returns True if sent."""
     graph = GraphClient()
     base = "http://localhost:8500"
+
     tree_link = f"{base}/tree?token={DONE_SECRET}"
+    outreach_link = f"{base}/outreach?token={DONE_SECRET}"
     report_link = f"{base}/report?token={DONE_SECRET}"
     request_link = f"{base}/request?token={DONE_SECRET}"
     health_link = f"{base}/health?token={DONE_SECRET}"
-    control_link = f"{base}/control?token={DONE_SECRET}"
 
     html = f"""
     <html><body>
-    <h2>🛰️ Your Sales Support Agent is ready</h2>
-    <p>Pin this email — it's your control centre.</p>
+    <h2>🛰️ Sasha's Sales Sidekick</h2>
     <ul>
-      <li><a href="{tree_link}">📋 Open Conversation Tree</a></li>
-      <li><a href="{control_link}">📂 Open Full Control Centre</a></li>
+      <li><a href="{tree_link}">🌴 Open Conversation Tree</a></li>
+      <li><a href="{outreach_link}">🚀 Outreach Engine</a></li>
     </ul>
     <p>——— Advanced ———</p>
     <ul>
@@ -35,7 +35,7 @@ def send_control_center_email():
     """
     return graph.create_draft(
         to=USER_EMAIL,
-        subject="Your Sales Support Agent – Control Centre",
+        subject="Sales Agent Tools & Control Center",
         body=html,
         content_type="HTML",
     )

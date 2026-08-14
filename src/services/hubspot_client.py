@@ -442,3 +442,40 @@ class HubSpotClient:
 
         engagements.sort(key=lambda x: x.get("timestamp") or "")
         return engagements[:limit]
+
+    def create_contact(self, first_name: str, last_name: str, email: str, company: str = "", jobtitle: str = "") -> Optional[str]:
+        """
+        Create a contact in HubSpot, or update an existing contact with company/jobtitle.
+        Returns the contact ID on success/update, or None on failure.
+        """
+        endpoint = "/crm/v3/objects/contacts"
+        payload = {
+            "properties": {
+                "firstname": first_name,
+                "lastname": last_name,
+                "email": email,
+                "company": company,
+                "jobtitle": jobtitle,
+            }
+        }
+
+        result = self._make_request("POST", endpoint, json=payload)
+        if result:
+            return result.get("id")
+
+        existing_id = self.get_contact_by_email(email)
+        if existing_id:
+            update_payload = {"properties": {}}
+            if company:
+                update_payload["properties"]["company"] = company
+            if jobtitle:
+                update_payload["properties"]["jobtitle"] = jobtitle
+            if update_payload["properties"]:
+                self._make_request(
+                    "PATCH",
+                    f"/crm/v3/objects/contacts/{existing_id}",
+                    json=update_payload,
+                )
+            return existing_id
+
+        return None

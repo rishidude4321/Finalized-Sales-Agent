@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Outreach Results{% endblock %}
+{% block content %}
+  <h1>📋 Generated Outreach</h1>
+
+  <div class="card">
+    <h3>Email Drafts</h3>
+    <pre style="white-space: pre-wrap; font-family: inherit; background:#f8f8f8; padding:14px; border-radius:8px;">{{ email_text }}</pre>
+  </div>
+
+  <div class="card">
+    <h3>🌐 Live Lead Results</h3>
+
+    {% if message %}
+      <p style="color:#b00020;"><strong>⚠️ {{ message }}</strong></p>
+    {% endif %}
+
+    {% if leads %}
+      <table style="width:100%; border-collapse: collapse;">
+        <tr>
+          <th style="text-align:left; padding:6px;">Name</th>
+          <th style="text-align:left; padding:6px;">Role</th>
+          <th style="text-align:left; padding:6px;">LinkedIn</th>
+        </tr>
+        {% for lead in leads %}
+        <tr>
+          <td style="padding:6px;">{{ lead.name }}</td>
+          <td style="padding:6px;">{{ lead.role }}</td>
+          <td style="padding:6px;"><a href="{{ lead.linkedin_url }}" target="_blank">Open</a></td>
+        </tr>
+        {% endfor %}
+      </table>
+
+      <form action="/more_leads" method="POST" style="margin-top:16px;">
+        <input type="hidden" name="token" value="{{ token }}">
+        <input type="hidden" name="cache_id" value="{{ cache_id }}">
+        <button type="submit">🔄 Generate More Leads</button>
+      </form>
+    {% else %}
+      <p>No leads found.</p>
+    {% endif %}
+  </div>
+{% endblock %}

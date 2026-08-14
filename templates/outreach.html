@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Outreach Engine{% endblock %}
+{% block content %}
+  <h1>🚀 Automated Outreach Engine</h1>
+  <div class="card">
+    <p>Generate targeted emails and a live LinkedIn lead list.</p>
+    <form action="/generate_outreach" method="POST">
+      <input type="hidden" name="token" value="{{ token }}">
+
+      <label>Target Sector / Profile <span style="color:#E3267E;">*</span></label>
+      <input type="text" name="target_sector" placeholder="{{ defaults.target_sector }}">
+
+      <label>Company Scale <span style="color:#E3267E;">*</span></label>
+      <input type="text" name="company_scale" placeholder="{{ defaults.company_scale }}">
+
+      <label>Location <span style="color:#E3267E;">*</span></label>
+      <input type="text" name="target_location" placeholder="{{ defaults.location }}">
+
+      <label>Campaign Goal <span style="color:#E3267E;">*</span></label>
+      <input type="text" name="campaign_goal" placeholder="{{ defaults.campaign_goal }}">
+
+      <label>Offer / Pricing Context</label>
+      <input type="text" name="pricing_context" placeholder="{{ defaults.pricing_context }}">
+
+      <label>Personal links or assets to include</label>
+      <input type="text" name="user_bio_context" placeholder="{{ defaults.user_bio_context }}">
+
+      <label>Your voice or writing style sample</label>
+      <textarea name="writing_style" placeholder="{{ defaults.writing_style }}"></textarea>
+
+      <br><br>
+      <button type="submit">⚡ Generate Leads</button>
+    </form>
+  </div>
+{% endblock %}

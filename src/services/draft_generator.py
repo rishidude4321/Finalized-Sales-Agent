@@ -1,14 +1,23 @@
 """
 Draft Generator for Module 3.
-Creates personalized draft emails from templates and real data.
-Deterministic – no LLM.
+Creates personalized draft emails using deterministic facts and optional LLM phrasing.
+Validates LLM output; falls back to templates if anything is missing.
 """
 
 import json
 from pathlib import Path
 from typing import Dict, Optional
+
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+
 from src.services.graph_client import GraphClient
 from src.services.hubspot_client import HubSpotClient
+from src.services.model_selector import get_best_model
+from src.utils.config import OPENROUTER_API_KEY, OPENROUTER_BASE_URL
+from src.utils.logger import get_logger
+
+logger = get_logger("draft_generator")
 
 
 class DraftGenerator:
@@ -21,12 +30,15 @@ class DraftGenerator:
         self.templates = self._load_templates()
         self.drafts_created = self._load_drafts_created()
 
+    # ------------------------------------------------------------------
+    # File helpers
+    # ------------------------------------------------------------------
     def _load_templates(self) -> Dict:
         path = Path(self.TEMPLATES_FILE)
         if path.exists():
             try:
                 return json.loads(path.read_text())
-            except:
+            except Exception:
                 pass
         return {}
 
@@ -35,7 +47,7 @@ class DraftGenerator:
         if path.exists():
             try:
                 return json.loads(path.read_text())
-            except:
+            except Exception:
                 pass
         return {}
 
@@ -43,11 +55,15 @@ class DraftGenerator:
         with open(self.DRAFTS_CREATED_FILE, "w") as f:
             json.dump(self.drafts_created, f, indent=2)
 
+    # ------------------------------------------------------------------
+    # Data gathering
+    # ------------------------------------------------------------------
     def _get_contact_info(self, email: str) -> Dict:
-        """Fetch first name and company from HubSpot, fallback to email display name."""
-        info = {"first_name": email.split("@")[0], "company": ""}
+        """Fetch first name and company from HubSpot.
+        first_name will be empty if not found, so the LLM/template can use a neutral greeting.
+        """
+        info = {"first_name": "", "company": ""}
         try:
-            # Search HubSpot contact
             endpoint = "/crm/v3/objects/contacts/search"
             payload = {
                 "filterGroups": [{"filters": [{"propertyName": "email", "operator": "EQ", "value": email}]}],
@@ -67,77 +83,184 @@ class DraftGenerator:
             pass
         return info
 
-    def _fill_placeholders(self, template_body: str, data: Dict) -> str:
-        """Replace {placeholders} with actual values."""
-        filled = template_body
-        for key, value in data.items():
-            filled = filled.replace("{" + key + "}", str(value))
-        return filled
+    def _get_original_email_preview(self, thread_id: str, contact_email: str) -> str:
+        """
+        Fetch the most recent email from the given conversation thread that involves the contact.
+        Returns a short preview string, or empty string if not available.
+        """
+        if not thread_id:
+            return ""
+        try:
+            emails = self.graph.get_emails_with_contact(contact_email, days=30)
+            for mail in reversed(emails):
+                if mail.get("conversationId") == thread_id:
+                    return (mail.get("preview") or mail.get("body") or "")[:200]
+        except Exception as e:
+            logger.warning("Could not fetch original email preview for thread %s: %s", thread_id, e)
+        return ""
 
-    def _get_template(self, template_type: str) -> Optional[Dict]:
-        return self.templates.get(template_type)
+    # ------------------------------------------------------------------
+    # LLM email writer
+    # ------------------------------------------------------------------
+    def _build_llm(self):
+        model_id = get_best_model()
+        return ChatOpenAI(
+            model=model_id,
+            openai_api_key=OPENROUTER_API_KEY,
+            openai_api_base=OPENROUTER_BASE_URL,
+            temperature=0.5,
+            max_tokens=300,
+        )
 
+    def _generate_draft_with_llm(self, context: Dict) -> str:
+        """Generate a natural email body using the LLM. Returns the body text."""
+        system_prompt = (
+            "You are Sasha's executive assistant. Write a brief, natural, professional email "
+            "from Sasha Peña, Head of Emploability, REACH Pathways.\n"
+            "Use ONLY the following verified facts. Do not invent names, dates, numbers, promises, links, or offers.\n"
+            "Keep the email under 120 words.\n"
+            "Use a warm, peer-to-peer tone. Avoid generic text that doesn't feel like from an actual human.\n"
+            "If the recipient first name is empty, start with 'Good Morning' or 'Good Afternoon' without a name. Do not use email prefixes as names.\n"
+            "Preserve the signature exactly as provided.\n\n"
+            "VERIFIED FACTS:\n"
+            f"Recipient first name: {context.get('first_name') or 'Unknown'}\n"
+            f"Recipient company: {context.get('company') or 'Unknown'}\n"
+            f"Original email subject: {context.get('original_subject')}\n"
+            f"Original email preview: {context.get('email_preview') or 'N/A'}\n"
+            f"Follow-up type: {context.get('follow_up_type')}\n"
+            f"Days since last contact: {context.get('days_since', 'unknown')}\n\n"
+            "Signature to use exactly:\n"
+            "Best,\n"
+            "Sasha Peña\n"
+            "Head of Emploability\n"
+            "REACH Pathways"
+        )
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            ("human", "Write the email body now please."),
+        ])
+
+        llm = self._build_llm()
+        chain = prompt | llm
+        response = chain.invoke({})
+        return response.content if hasattr(response, "content") else str(response)
+
+    # ------------------------------------------------------------------
+    # Validation
+    # ------------------------------------------------------------------
+    def _validate_llm_draft(self, draft: str, context: Dict) -> bool:
+        """Return True if the LLM draft contains the minimal required signature."""
+        if not draft:
+            return False
+        required = [
+            "Sasha Peña".lower(),
+            "REACH Pathways".lower(),
+            "Head of Employability".lower(),
+        ]
+        # If we have a first name, ensure it appears in the greeting
+        if context.get("first_name"):
+            required.append(context["first_name"].lower())
+
+        return all(part in draft.lower() for part in required)
+
+    # ------------------------------------------------------------------
+    # Public methods
+    # ------------------------------------------------------------------
     def create_follow_up_draft(self, follow_up_item, original_email: Optional[Dict] = None) -> bool:
         """
-        Create a draft for a follow-up item (from Module 1).
-        Returns True if a new draft was created, False if already exists.
+        Create a personalized follow-up draft in Outlook.
+        Uses LLM-generated body if it validates, otherwise falls back to templates.
         """
         contact_email = follow_up_item.contact
-        # Unique key to prevent duplicates
         key = f"followup-{contact_email}-{follow_up_item.action[:50]}"
         if key in self.drafts_created:
             return False
 
-        # Determine template type based on reasoning
+        contact_info = self._get_contact_info(contact_email)
+
+        # Determine follow-up type from reasoning
         reasoning = follow_up_item.reasoning.lower()
         if "no reply for" in reasoning and "14" in reasoning:
-            template_type = "long_term_nudge"
+            follow_up_type = "long_term_nudge"
         elif "no reply for" in reasoning:
-            template_type = "gentle_nudge"
+            follow_up_type = "gentle_nudge"
         else:
-            template_type = "follow_up"
+            follow_up_type = "follow_up"
 
-        template = self._get_template(template_type)
-        if not template:
-            return False
+        # Extract the real email subject from the follow-up action
+        original_subject = self._extract_original_subject(follow_up_item.action)
 
-        contact_info = self._get_contact_info(contact_email)
-        original_subject = follow_up_item.action.replace("Reply to ", "").replace("Follow up on: ", "")
-        # Attempt to get original email subject from the follow-up's reasoning
-        # It's stored in reasoning field now; we can extract it.
-        original_subject = follow_up_item.reasoning.replace("Recent email asks: ", "").replace("No reply for", "Re: ")
-        if original_subject.startswith("Re: "):
-            original_subject = original_subject[4:]
+        email_preview = self._get_original_email_preview(
+            follow_up_item.thread_id, contact_email
+        )
 
-        meeting_subject = follow_up_item.action if "Follow up on:" in follow_up_item.action else ""
-        extra_context = ""
-        if contact_info.get("company"):
-            extra_context = f"I've been impressed by {contact_info['company']}'s work in the space."
-
-        data = {
+        context = {
             "first_name": contact_info["first_name"],
+            "company": contact_info.get("company", ""),
             "original_subject": original_subject,
-            "meeting_subject": meeting_subject,
-            "extra_context": extra_context,
+            "email_preview": email_preview,
+            "follow_up_type": follow_up_type,
+            "days_since": "unknown",
         }
 
-        subject = self._fill_placeholders(template["subject"], data)
-        body = self._fill_placeholders(template["body"], data)
+        # Try LLM generation
+        body = None
+        try:
+            body = self._generate_draft_with_llm(context)
+            if not self._validate_llm_draft(body, context):
+                logger.warning("LLM draft failed validation, using template fallback.")
+                body = None
+        except Exception as e:
+            logger.warning("LLM draft generation failed: %s", e)
+            body = None
 
-        # Create draft in Outlook
-        success = self.graph.create_draft(to=contact_email, subject=subject, body=body, content_type="Text")
+        # Fallback to template if needed
+        if not body:
+            template = self.templates.get(follow_up_type)
+            greeting_name = context["first_name"] or ""
+            if greeting_name:
+                greeting = f"Hi {greeting_name}"
+            else:
+                greeting = "Good Morning"
+            if template:
+                subject_template = template.get("subject", "Follow-up")
+                body_template = template.get("body", "")
+                subject = subject_template.replace("{original_subject}", original_subject)
+                body = body_template.replace("{first_name}", greeting_name)
+                body = body.replace("{original_subject}", original_subject)
+                body = body.replace("{email_preview}", email_preview)
+                body = body.replace("{greeting}", greeting)
+            else:
+                subject = f"Re: {original_subject}"
+                body = f"{greeting},\n\nJust following up on this.\n\nBest,\nSasha Peña\nFounder & Partnerships Lead\nREACH Pathways"
+
+        # Build subject deterministically
+        if follow_up_type == "gentle_nudge":
+            subject = f"Checking in – {original_subject}"
+        elif follow_up_type == "long_term_nudge":
+            subject = f"Reconnecting – {original_subject}"
+        else:
+            subject = f"Following up – {original_subject}"
+
+        success = self.graph.create_draft(
+            to=contact_email,
+            subject=subject,
+            body=body,
+            content_type="Text",
+        )
+
         if success:
             self.drafts_created[key] = True
             self._save_drafts_created()
-            print(f"   📧 Draft created for {contact_email} – {subject}")
+            logger.info("Draft created for %s – %s", contact_email, subject)
         return success
 
     def create_post_meeting_draft(self, event: Dict) -> bool:
         """
         Create a thank-you draft after a meeting ends.
-        event: dict with 'id', 'subject', 'attendees', 'start', 'end'
+        Uses LLM with validation; falls back to template.
         """
-        # Check if we already processed this meeting
         key = f"postmeeting-{event['id']}"
         if key in self.drafts_created:
             return False
@@ -149,45 +272,100 @@ class DraftGenerator:
             try:
                 end_dt = datetime.datetime.fromisoformat(end_time_str.replace("Z", "+00:00"))
                 now = datetime.datetime.now(datetime.timezone.utc)
-                if (now - end_dt).total_seconds() > 1800:  # 30 minutes
+                if (now - end_dt).total_seconds() > 1800:
                     return False
-            except:
-                pass  # if parsing fails, proceed anyway (safe)
+            except Exception:
+                pass
 
-        # Generate draft for each external attendee
-        external_attendees = []
-        for email in event.get("attendees", []):
-            if "@" in email and not email.endswith("@reachpathways.com"):
-                external_attendees.append(email)
-
+        external_attendees = [
+            email for email in event.get("attendees", [])
+            if "@" in email and not email.endswith("@reachpathways.com")
+        ]
         if not external_attendees:
-            return False
-
-        template = self._get_template("post_meeting")
-        if not template:
             return False
 
         created_any = False
         for email in external_attendees:
             contact_info = self._get_contact_info(email)
-            extra_context = ""
-            if contact_info.get("company"):
-                extra_context = f"I particularly enjoyed learning more about {contact_info['company']}."
-
-            data = {
+            context = {
                 "first_name": contact_info["first_name"],
-                "meeting_subject": event.get("subject", "our conversation"),
-                "extra_context": extra_context,
+                "company": contact_info.get("company", ""),
+                "original_subject": event.get("subject", "our meeting"),
+                "email_preview": "",
+                "follow_up_type": "post_meeting",
+                "days_since": "0",
             }
-            subject = self._fill_placeholders(template["subject"], data)
-            body = self._fill_placeholders(template["body"], data)
 
-            success = self.graph.create_draft(to=email, subject=subject, body=body, content_type="Text")
+            body = None
+            try:
+                body = self._generate_draft_with_llm(context)
+                if not self._validate_llm_draft(body, context):
+                    body = None
+            except Exception as e:
+                logger.warning("LLM post-meeting draft failed: %s", e)
+
+            if not body:
+                template = self.templates.get("post_meeting")
+                if template:
+                    subject_template = template.get("subject", "Great meeting you")
+                    body_template = template.get("body", "")
+                    subject = subject_template.replace("{meeting_subject}", event.get("subject", "our conversation"))
+                    body = body_template.replace("{first_name}", context["first_name"])
+                else:
+                    subject = f"Great meeting you – {event.get('subject', 'our conversation')}"
+                    body = f"Hi {context['first_name']},\n\nIt was great meeting you today. Thank you for the time.\n\nBest,\nSasha Peña"
+
+            subject = f"Great meeting you – {event.get('subject', 'our conversation')}"
+
+            success = self.graph.create_draft(
+                to=email,
+                subject=subject,
+                body=body,
+                content_type="Text",
+            )
             if success:
                 created_any = True
-                print(f"   📧 Post‑meeting draft for {email} – {subject}")
+                logger.info("Post-meeting draft created for %s", email)
 
         if created_any:
             self.drafts_created[key] = True
             self._save_drafts_created()
         return created_any
+
+    def _extract_original_subject(self, action: str) -> str:
+        """
+        Clean the follow-up action text down to the real email subject.
+        Examples:
+          'Reply to Rishi Vira re: ahhhhhh' -> 'ahhhhhh'
+          'Follow up on: some subject'      -> 'some subject'
+          'Review: circling v2'             -> 'circling v2'
+        """
+        subject = action.strip()
+
+        # 'Reply to <name> re: <subject>'
+        if subject.lower().startswith("reply to "):
+            if " re: " in subject:
+                subject = subject.split(" re: ", 1)[1].strip()
+            else:
+                # No re: marker, take everything after 'Reply to <name>'? keep as is.
+                subject = subject[len("Reply to "):].strip()
+                # Remove the name part if present, e.g. 'Rishi Vira re: ahhhhhh'
+                if " re: " in subject:
+                    subject = subject.split(" re: ", 1)[1].strip()
+
+        # 'Follow up on: <subject>'
+        elif subject.lower().startswith("follow up on:"):
+            subject = subject[len("Follow up on:"):].strip()
+
+        # 'Review: <subject>'
+        elif subject.lower().startswith("review:"):
+            subject = subject[len("Review:"):].strip()
+
+        # Strip common prefixes one more time
+        lower = subject.lower()
+        for prefix in ["re:", "fw:", "fwd:"]:
+            if lower.startswith(prefix):
+                subject = subject[3:].strip()
+                break
+
+        return subject.strip()

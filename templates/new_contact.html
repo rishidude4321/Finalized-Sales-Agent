@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Add Contact to HubSpot{% endblock %}
+{% block content %}
+  <h1>⭐️ Add Contact to HubSpot</h1>
+  <div class="card">
+    <p>This contact wasn’t found in HubSpot. You can add them now.</p>
+
+    <form action="/create_contact" method="POST">
+      <input type="hidden" name="token" value="{{ token }}">
+      <input type="hidden" name="redirect_to" value="{{ redirect_to }}">
+      <input type="hidden" name="hash" value="{{ item_hash }}">
+      <input type="hidden" name="title" value="{{ title }}">
+      <input type="hidden" name="duedays" value="{{ duedays }}">
+
+      <label>Full name <span style="color:#E3267E;">*</span></label>
+      <input type="text" name="full_name" value="{{ name }}" required>
+
+      <label>Email <span style="color:#E3267E;">*</span></label>
+      <input type="email" name="email" value="{{ email }}" required>
+
+      <label>Job title</label>
+      <input type="text" name="jobtitle" value="{{ jobtitle }}">
+
+      <br><br>
+      <button type="submit" id="add-contact-btn" onclick="this.disabled=true; this.textContent='Adding…'; this.form.submit();">⚡️ Add Contact</button>
+    </form>
+  </div>
+{% endblock %}

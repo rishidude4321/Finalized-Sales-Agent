@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional, Dict
 import requests
 from src.utils.config import SERPER_API_KEY
+from src.utils.agent_state import increment_usage
 
 
 class SerperProvider:
@@ -83,6 +84,7 @@ class CompanyEnricher:
         # Fetch from provider
         data = self.provider.lookup_company(domain)
         if data:
+            increment_usage("serper", 1)
             self._cache[domain] = {"timestamp": time.time(), "data": data}
             self._save_cache()
         return data

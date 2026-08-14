@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY", "")
 
 # Model you want to use via OpenRouter (Claude 3.5 Sonnet)
 LLM_MODEL = "openai/gpt-3.5-turbo"
