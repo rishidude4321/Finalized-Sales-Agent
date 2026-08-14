@@ -41,6 +41,34 @@ jobs:
           Copy-Item extra_keywords.json package\
           Copy-Item .env.example package\
 
+      - name: Smoke test exe on Windows
+        shell: pwsh
+        run: |
+          # Create a minimal .env and dummy token cache so run.py doesn't launch browser auth
+          Copy-Item .env.example package\.env
+          Add-Content -Path package\.env -Value "`nDONE_SECRET=ci-test-secret"
+          Set-Content -Path package\token_cache.json -Value "{}"
+
+          # Start the exe in background from the package folder
+          Start-Process -FilePath "package\SalesSupportAgent.exe" -WorkingDirectory "package" -WindowStyle Hidden
+
+          # Wait for Flask to start
+          Start-Sleep -Seconds 25
+
+          # Check health page
+          $response = Invoke-WebRequest -Uri "http://localhost:8500/health?token=ci-test-secret" -UseBasicParsing
+
+          if ($response.StatusCode -ne 200) {
+            Write-Error "Health check failed with status $($response.StatusCode)"
+            Get-Content package\logs\agent.log -ErrorAction SilentlyContinue
+            exit 1
+          }
+
+          Write-Output "Health check passed."
+
+          # Stop the exe
+          Stop-Process -Name SalesSupportAgent -Force -ErrorAction SilentlyContinue
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
