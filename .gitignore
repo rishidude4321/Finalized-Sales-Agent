@@ -4,9 +4,6 @@ __pycache__/
 *.pyc
 token_cache.json
 logs/
-*.log
-.DS_Store
-.vscode/
 
 agent_status.json
 company_cache.json
