@@ -52,6 +52,9 @@ class GraphClient:
             return ""
 
         # Parse the ISO string as a naive datetime, then attach UTC timezone
+        if '.' in iso_string:
+            base, frac = iso_string.split('.', 1)
+            iso_string = base + '.' + frac[:6]
         utc_dt = dt.fromisoformat(iso_string).replace(tzinfo=dt_timezone.utc)
 
         # Convert to the desired local timezone (use config value)

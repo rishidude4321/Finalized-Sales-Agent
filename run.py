@@ -5,21 +5,29 @@ Designed to be launched once at login; handles laptop sleep and missed runs safe
 """
 
 import datetime
+import os
+import sys
 import time
 import threading
 import traceback
+from pathlib import Path
 
+from server import app as flask_app
 from src.utils.logger import get_logger
 from src.utils.agent_state import load_agent_status, save_agent_status
 from src.services.status_reporter import send_status_email
 
-from server import app as flask_app
+# Ensure the current working directory is the folder containing the exe/script
+if getattr(sys, "frozen", False):
+    base_dir = Path(sys.executable).parent
+else:
+    base_dir = Path(__file__).parent
+os.chdir(base_dir)
 
 logger = get_logger("run")
 
-# ---- Constants ----
-WATCHER_INTERVAL_SECONDS = 300   # 5 minutes
-BRIEFING_HOUR = 5                # 5 AM
+WATCHER_INTERVAL_SECONDS = 300
+BRIEFING_HOUR = 5
 BRIEFING_MINUTE = 0
 
 def should_run_briefing_today() -> bool:
@@ -85,6 +93,18 @@ def watcher_cycle():
 def main_loop():
     """Main orchestration loop. Runs forever until process is terminated."""
     logger.info("Sales Support Agent started.")
+
+    # If no Microsoft Graph token, open browser authentication once
+    token_path = Path("token_cache.json")
+    if not token_path.exists():
+        logger.info("No Graph token found – starting Microsoft authentication.")
+        try:
+            from src.services.graph_auth import run_graph_auth
+            run_graph_auth()
+            logger.info("Microsoft authentication completed.")
+        except Exception as e:
+            logger.error("Graph authentication failed: %s", e)
+            raise
 
     # Start Flask server
     start_flask_server()

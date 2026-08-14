@@ -40,7 +40,19 @@ from flask import Flask, request, render_template, redirect
 import urllib.parse
 from src.services.company_enricher import CompanyEnricher
 
-app = Flask(__name__)
+import os
+import sys
+
+if getattr(sys, "frozen", False):
+    base_dir = os.path.dirname(sys.executable)
+else:
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
+app = Flask(
+    __name__,
+    template_folder=os.path.join(base_dir, "templates"),
+    static_folder=os.path.join(base_dir, "static"),
+)
 
 # ---------- File constants ----------
 DATA_FILE = Path("done_followups.json")
