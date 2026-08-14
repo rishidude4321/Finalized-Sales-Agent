@@ -4,6 +4,7 @@ Finds new calendar events, enriches attendees, and updates event body with prep 
 """
 
 from datetime import datetime
+from src.utils.config import USER_EMAIL
 import email
 import json
 import re
@@ -26,7 +27,10 @@ PROCESSED_EVENTS_FILE = "processed_events.json"
 INVITE_SUGGESTIONS_FILE = "invite_suggestions.json"
 PREP_MARKER = "<!-- sales-agent-meeting-prep -->"
 ICP_CRITERIA_FILE = "icp_criteria.json"
-
+FREE_EMAIL_DOMAINS = {
+    "gmail.com", "yahoo.com", "hotmail.com", "outlook.com",
+    "icloud.com", "me.com", "aol.com", "protonmail.com"
+}
 
 class MeetingPrepProcessor:
     def __init__(self):
@@ -48,18 +52,32 @@ class MeetingPrepProcessor:
     def _match_icp(self, company_info: Dict, meeting_subject: str) -> Optional[Dict]:
         """
         Determine which ICP segment best matches the meeting context.
-        Returns a dict with segment label, match count, talking points, and relevant people.
+        Uses all available company info, including name and domain.
         """
         if not self.icp_criteria:
             return None
 
-        # Build a combined text blob from all available company info and subject
-        text = meeting_subject.lower() + " "
-        if company_info.get("hubspot_company"):
-            hs = company_info["hubspot_company"]
-            text += ((hs.get("description") or "") + " " + (hs.get("industry") or "")).lower() + " "
-        if company_info.get("enriched"):
-            text += (company_info["enriched"].get("description") or "").lower()
+        text_parts = [meeting_subject]
+
+        if company_info.get("domain"):
+            text_parts.append(company_info["domain"])
+
+        hs = company_info.get("hubspot_company") or {}
+        if hs:
+            text_parts.extend([
+                hs.get("name") or "",
+                hs.get("description") or "",
+                hs.get("industry") or "",
+            ])
+
+        enriched = company_info.get("enriched") or {}
+        if enriched:
+            text_parts.extend([
+                enriched.get("name") or "",
+                enriched.get("description") or "",
+            ])
+
+        text = " ".join(text_parts).lower()
 
         best_segment = None
         best_score = 0
@@ -70,7 +88,7 @@ class MeetingPrepProcessor:
                 best_score = hits
                 best_segment = seg_key
 
-        if best_segment and best_score >= 1:  # require at least 1 keyword hit
+        if best_segment and best_score >= 1:
             seg_data = self.icp_criteria[best_segment]
             return {
                 "segment": seg_data.get("label", best_segment),
@@ -78,7 +96,9 @@ class MeetingPrepProcessor:
                 "talking_points": seg_data.get("talking_points", ""),
                 "relevant_people": seg_data.get("relevant_people", []),
             }
+
         return None
+
     def _load_processed_ids(self) -> Set[str]:
         path = Path(PROCESSED_EVENTS_FILE)
         if path.exists():
@@ -102,16 +122,30 @@ class MeetingPrepProcessor:
         return []
 
     def _extract_external_domains(self, attendees: List[str]) -> List[str]:
-        """Return unique email domains that are not Sasha's own domain."""
-        # Sasha's domain is hardcoded for now; could be from config.
+        """
+        Return unique external domains, with business domains before free email providers.
+        This prevents researching Gmail when a company domain exists.
+        """
         internal_domain = "reachpathways.com"
-        domains = set()
+
+        business_domains = []
+        free_domains = []
+        seen = set()
+
         for email in attendees:
-            if "@" in email:
-                domain = email.split("@")[-1].lower()
-                if domain != internal_domain:
-                    domains.add(domain)
-        return sorted(domains)
+            if "@" not in email:
+                continue
+            domain = email.split("@")[-1].lower()
+            if domain == internal_domain or domain in seen:
+                continue
+            seen.add(domain)
+
+            if domain in FREE_EMAIL_DOMAINS:
+                free_domains.append(domain)
+            else:
+                business_domains.append(domain)
+
+        return business_domains + free_domains
 
     def _get_company_info(self, domain: str) -> Dict:
         """Gather company info from HubSpot and enrichment."""
@@ -310,7 +344,12 @@ class MeetingPrepProcessor:
 
             print(f"🔄 Processing meeting: {event['subject']}")
             prep_note = self._build_prep_note(event)
-            success = self.graph.update_event_body(event["id"], prep_note)
+            success = self.graph.create_draft(
+                to=USER_EMAIL,
+                subject=f"Meeting Prep: {event.get('subject', 'Meeting')}",
+                body=prep_note,
+                content_type="HTML",
+            )
             if success:
                 self.processed_ids.add(event["id"])
                 processed_count += 1
