@@ -28,7 +28,7 @@ jobs:
         run: |
           pyinstaller --onefile --name SalesSupportAgent run.py
 
-      - name: Prepare package folder
+      - name: Prepare final package
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path package
@@ -39,37 +39,37 @@ jobs:
           Copy-Item invite_suggestions.json package\
           Copy-Item email_templates.json package\
           Copy-Item extra_keywords.json package\
-          Copy-Item .env.example package\
 
-      - name: Smoke test exe on Windows
+          # Create .env from template so Sasha just opens and fills it
+          Copy-Item .env.example package\.env
+
+      - name: Smoke test in isolated folder
         shell: pwsh
         run: |
-          # Create a minimal .env and dummy token cache so run.py doesn't launch browser auth
-          Copy-Item .env.example package\.env
-          Add-Content -Path package\.env -Value "`nDONE_SECRET=ci-test-secret"
-          Set-Content -Path package\token_cache.json -Value "{}"
+          # Use a separate test folder so final package stays clean
+          New-Item -ItemType Directory -Force -Path test_package
+          Copy-Item package\* test_package\ -Recurse -Force
 
-          # Start the exe in background from the package folder
-          Start-Process -FilePath "package\SalesSupportAgent.exe" -WorkingDirectory "package" -WindowStyle Hidden
+          Add-Content -Path test_package\.env -Value "`nDONE_SECRET=ci-test-secret"
+          Set-Content -Path test_package\token_cache.json -Value "{}"
 
-          # Wait for Flask to start
+          Start-Process -FilePath "test_package\SalesSupportAgent.exe" -WorkingDirectory "test_package" -WindowStyle Hidden
           Start-Sleep -Seconds 25
 
-          # Check health page
           $response = Invoke-WebRequest -Uri "http://localhost:8500/health?token=ci-test-secret" -UseBasicParsing
 
           if ($response.StatusCode -ne 200) {
             Write-Error "Health check failed with status $($response.StatusCode)"
-            Get-Content package\logs\agent.log -ErrorAction SilentlyContinue
+            if (Test-Path test_package\logs\agent.log) {
+              Get-Content test_package\logs\agent.log
+            }
             exit 1
           }
 
           Write-Output "Health check passed."
-
-          # Stop the exe
           Stop-Process -Name SalesSupportAgent -Force -ErrorAction SilentlyContinue
 
-      - name: Upload artifact
+      - name: Upload clean package
         uses: actions/upload-artifact@v4
         with:
           name: SalesSupportAgent-Windows
